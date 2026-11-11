@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Baudoku – Fotodokumentation &amp; Aufmaß</title>
+<meta name="theme-color" content="#1f2933">
+<meta name="description" content="Projektbezogene Baustellen-Fotodokumentation mit Zeit- und Ortsstempel, Notizen, Foto-Aufmaß und PDF-Export.">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="./icons/icon-192.png">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Baudoku">
+<link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+<div id="app"><div class="splash">Baudoku wird geladen…</div></div>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<div id="modal-root"></div>
+<input type="file" id="in-camera" accept="image/*" capture="environment" hidden>
+<input type="file" id="in-gallery" accept="image/*" multiple hidden>
+<input type="file" id="in-import" accept=".zip,.json,application/zip,application/json" hidden>
+<script src="./vendor/jspdf.umd.min.js"></script>
+<script src="./vendor/jszip.min.js"></script>
+<script type="module" src="./js/app.js"></script>
+</body>
+</html>
