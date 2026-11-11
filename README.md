@@ -25,7 +25,7 @@ Die Dateien liegen im Wurzelverzeichnis (inkl. `.nojekyll`, damit GitHub Pages n
 
 https://rajko89.github.io/baudoku/
 
-Quelle in GitHub Pages: Branch `main`, Ordner `/` (root). Bei Updates `VERSION` in `sw.js` erhöhen.
+Veröffentlichung: Workflow `.github/workflows/pages.yml` (GitHub Actions). In den Repository-Einstellungen muss die Pages-Quelle einmalig auf **GitHub Actions** stehen. Alternativ, ohne Actions: Quelle **Deploy from a branch**, Branch `main`, Ordner `/` (root) – dann den Workflow deaktivieren, damit nicht zwei Quellen gleichzeitig veröffentlichen. Bei Updates `VERSION` in `sw.js` erhöhen.
 
 ## Hinweise
 - Daten liegen nur im Browser-Speicher des Geräts: regelmäßig Backup (ZIP) erstellen. Beim Löschen der Website-Daten / Deinstallation gehen sie verloren.
