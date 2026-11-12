@@ -1,6 +1,6 @@
 // IndexedDB-Speicher (alles lokal auf dem Gerät)
-const DB_NAME = 'baudoku', DB_VER = 1;
-export const STORES = ['projects', 'photos', 'notes', 'aufmass', 'settings'];
+const DB_NAME = 'baudoku', DB_VER = 2;
+export const STORES = ['projects', 'photos', 'notes', 'aufmass', 'settings', 'sketches'];
 let dbp;
 function open() {
   if (dbp) return dbp;
@@ -9,7 +9,7 @@ function open() {
     r.onupgradeneeded = () => {
       const d = r.result;
       if (!d.objectStoreNames.contains('projects')) d.createObjectStore('projects', { keyPath: 'id' });
-      for (const s of ['photos', 'notes', 'aufmass']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' }).createIndex('projectId', 'projectId');
+      for (const s of ['photos', 'notes', 'aufmass', 'sketches']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' }).createIndex('projectId', 'projectId');
       if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings', { keyPath: 'key' });
     };
     r.onsuccess = () => res(r.result);
@@ -26,9 +26,9 @@ export async function all(name) { const s = await store(name); return req(s.getA
 export async function byProject(name, pid) { const s = await store(name); return req(s.index('projectId').getAll(pid)); }
 export async function deleteProject(pid) {
   const d = await open();
-  const t = d.transaction(['projects', 'photos', 'notes', 'aufmass'], 'readwrite');
+  const t = d.transaction(['projects', 'photos', 'notes', 'aufmass', 'sketches'], 'readwrite');
   t.objectStore('projects').delete(pid);
-  for (const s of ['photos', 'notes', 'aufmass']) {
+  for (const s of ['photos', 'notes', 'aufmass', 'sketches']) {
     const os = t.objectStore(s);
     const keys = await req(os.index('projectId').getAllKeys(pid));
     keys.forEach(k => os.delete(k));

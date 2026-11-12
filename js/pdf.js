@@ -3,18 +3,17 @@ import { fmtDate, fmtDateTime, fmtNum, fmtCoord, loadImg } from './util.js';
 import { drawToCanvas } from './media.js';
 import { renderAnnotated, fmtVal } from './measure.js';
 import { measureValue, realMapper } from './geom.js';
+import { renderSketch } from './sketch.js';
+import { computeFace, formatCalcText, scaleWarning } from './sketch-calc.js';
 
 const M = 15, PW = 210, PH = 297, CW = PW - 2 * M;
 const ACC = [232, 89, 12], DARK = [31, 41, 51], GREY = [91, 102, 114];
 
-export function amTotals(rows) {
-  const t = {}; rows.forEach(r => { const v = +r.menge; if (isFinite(v) && r.einheit) t[r.einheit] = (t[r.einheit] || 0) + v; }); return t;
-}
 async function jpeg(blob, max = 1600, q = 0.82) {
   const img = await loadImg(blob); try { const c = drawToCanvas(img, max); return { data: c.toDataURL('image/jpeg', q), w: c.width, h: c.height }; } finally { URL.revokeObjectURL(img._url); }
 }
 
-export async function buildPdf({ project, photos, notes, aufmass, settings, opts, progress = () => { } }) {
+export async function buildPdf({ project, photos, notes, aufmass, sketches = [], settings, opts, progress = () => { } }) {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   doc.setProperties({ title: `Baudokumentation ${project.name}`, author: settings.bearbeiter || '', creator: 'Baudoku' });
@@ -40,7 +39,7 @@ export async function buildPdf({ project, photos, notes, aufmass, settings, opts
   doc.setTextColor(...DARK); doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
   doc.splitTextToSize(project.name || 'Projekt', CW).forEach(l => { doc.text(l, M, y); y += 8; }); y += 4;
   const fields = [['Kunde', project.kunde], ['Adresse', project.adresse], ['Bauvorhaben-Nr.', project.bvnr], ['Datum', fmtDate(project.datum)], ['Bearbeiter', settings.bearbeiter], ['Erstellt am', fmtDateTime(Date.now())],
-    ['Umfang', `${photos.length} Fotos · ${notes.length} Notizen · ${aufmass.length} Aufmaß-Positionen`]];
+    ['Umfang', `${photos.length} Fotos · ${notes.length} Notizen · ${aufmass.length} Aufmaß-Positionen · ${sketches.length} Skizzen`]];
   doc.setFontSize(11);
   fields.forEach(([k, v]) => {
     if (!v) return; doc.setFont('helvetica', 'bold'); doc.setTextColor(...GREY); doc.text(k, M, y);
@@ -93,7 +92,11 @@ export async function buildPdf({ project, photos, notes, aufmass, settings, opts
     const head = () => { doc.setFillColor(...DARK); doc.rect(M, y, CW, 8, 'F'); doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); let x = M; C.forEach(c => { doc.text(c.t, c.r ? x + c.w - 2 : x + 2, y + 5.4, { align: c.r ? 'right' : 'left' }); x += c.w; }); y += 8; };
     head();
     aufmass.forEach((r, i) => {
-      const vals = { pos: r.pos || String(i + 1), bez: r.bez || '', menge: isFinite(r.menge) && r.menge !== null && r.menge !== '' ? fmtNum(+r.menge, 2) : '', einheit: r.einheit || '', src: r.photoId && photoNo.has(r.photoId) ? `Foto ${photoNo.get(r.photoId)}` : (r.expr && parseFloat(r.expr.replace(',', '.')) !== +r.menge ? r.expr : '') };
+      const srcBits = [];
+      if (r.photoId && photoNo.has(r.photoId)) srcBits.push(`Foto ${photoNo.get(r.photoId)}`);
+      if (r.calc?.faceLabel) srcBits.push(r.calc.faceLabel);
+      if (!srcBits.length && r.expr && parseFloat(String(r.expr).replace(',', '.')) !== +r.menge) srcBits.push(r.expr);
+      const vals = { pos: r.pos || String(i + 1), bez: r.bez || '', menge: isFinite(r.menge) && r.menge !== null && r.menge !== '' ? fmtNum(+r.menge, 2) : '', einheit: r.einheit || '', src: srcBits.join(' · ') };
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5);
       const bl = doc.splitTextToSize(vals.bez, C[1].w - 4); const sl = doc.splitTextToSize(vals.src, C[4].w - 3); const rh = Math.max(bl.length, sl.length, 1) * 4.2 + 3;
       if (y + rh > PH - 18) { newPage(); head(); doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); }
@@ -102,11 +105,33 @@ export async function buildPdf({ project, photos, notes, aufmass, settings, opts
       C.forEach(c => { const v = c.k === 'bez' ? bl : c.k === 'src' ? sl : [vals[c.k]]; doc.text(v, c.r ? x + c.w - 2 : x + 2, y + 5, { align: c.r ? 'right' : 'left' }); x += c.w; });
       y += rh;
     });
-    const tot = amTotals(aufmass);
-    need(10 + Object.keys(tot).length * 6); y += 2; doc.setDrawColor(...DARK); doc.setLineWidth(0.5); doc.line(M, y, M + CW, y); y += 6;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...DARK);
-    Object.entries(tot).forEach(([u, v]) => { doc.text(`Summe ${u}`, M + 2, y); doc.text(fmtNum(v, 2), M + 132 - 2, y, { align: 'right' }); doc.text(u, M + 134, y); y += 6; });
-    y += 2; txt('Mengen aus Foto-Aufmaß sind Schätzwerte auf Basis von Referenzmaßen und vor Ausführung/Bestellung zu prüfen.', 8.5, 'italic', GREY);
+    y += 2; txt('Positionen werden nicht pauschal addiert. Eine Gesamtfläche steht nur dort, wo sie ausdrücklich aus zusammengehörigen m²-Flächen gebildet wurde. Foto-Maße sind Schätzwerte.', 8.5, 'italic', GREY);
+  }
+
+  if (opts.includeSketches !== false && sketches.length) {
+    const amById = new Map(aufmass.map(r => [r.id, r]));
+    for (const sk of sketches) {
+      progress(`Skizze ${sk.title || ''}`);
+      newPage(); h1(`Skizze${sk.title ? ': ' + sk.title : ''}`);
+      if (sk.sourceImage) {
+        const img = await loadImg(sk.sourceImage);
+        try {
+          const c = renderSketch(img, sk, amById, 1600);
+          const data = c.toDataURL('image/jpeg', 0.86);
+          const maxH = 120;
+          let w = CW, h = w * c.height / c.width; if (h > maxH) { h = maxH; w = h * c.width / c.height; }
+          doc.addImage(data, 'JPEG', M + (CW - w) / 2, y, w, h); y += h + 4;
+        } finally { URL.revokeObjectURL(img._url); }
+      }
+      txt(scaleWarning(sk), 8.5, 'italic', GREY);
+      for (const face of sk.faces || []) {
+        const calc = computeFace(sk, face, amById);
+        const pos = aufmass.find(r => r.id === face.aufmassId)?.pos || '';
+        const name = `${face.isDeduction ? 'Abzug' : 'Dachfläche'} ${face.label}`;
+        formatCalcText({ pos, name, calc }).split('\n').forEach(line => txt(line, 10));
+        y += 1.5;
+      }
+    }
   }
 
   /* Aufmaß-Bilder */

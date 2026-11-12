@@ -6,7 +6,7 @@ const ext = t => (t && t.includes('png') ? 'png' : t && t.includes('webp') ? 'we
 
 export async function exportZip(projectIds) {
   const zip = new window.JSZip();
-  const out = { format: 'baudoku-backup', version: 1, exported: new Date().toISOString(), projects: [], photos: [], notes: [], aufmass: [] };
+  const out = { format: 'baudoku-backup', version: 2, exported: new Date().toISOString(), projects: [], photos: [], notes: [], aufmass: [], sketches: [] };
   for (const pid of projectIds) {
     const p = await db.get('projects', pid); if (!p) continue; out.projects.push(p);
     for (const ph of await db.byProject('photos', pid)) {
@@ -16,6 +16,11 @@ export async function exportZip(projectIds) {
     }
     out.notes.push(...await db.byProject('notes', pid));
     out.aufmass.push(...await db.byProject('aufmass', pid));
+    for (const sk of await db.byProject('sketches', pid)) {
+      const meta = { ...sk };
+      if (sk.sourceImage) { const name = `sketches/${sk.id}_source.${ext(sk.sourceImage.type)}`; zip.file(name, sk.sourceImage); meta.sourceImage = { file: name, type: sk.sourceImage.type }; }
+      out.sketches.push(meta);
+    }
   }
   zip.file('data.json', JSON.stringify(out, null, 1));
   return zip.generateAsync({ type: 'blob', compression: 'STORE', mimeType: 'application/zip' });
@@ -41,7 +46,14 @@ export async function importFile(file) {
       await db.put('photos', rec);
     }
     for (const nt of data.notes.filter(x => x.projectId === p.id)) await db.put('notes', { ...nt, id: nid(nt.id), projectId: proj.id, photoId: nid(nt.photoId) || null });
-    for (const r of data.aufmass.filter(x => x.projectId === p.id)) await db.put('aufmass', { ...r, id: nid(r.id), projectId: proj.id, photoId: nid(r.photoId) || null });
+    for (const r of data.aufmass.filter(x => x.projectId === p.id)) await db.put('aufmass', { ...r, id: nid(r.id), projectId: proj.id, photoId: nid(r.photoId) || null, sketchId: r.sketchId ? nid(r.sketchId) : null });
+    for (const sk of (data.sketches || []).filter(x => x.projectId === p.id)) {
+      const rec = { ...sk, id: nid(sk.id), projectId: proj.id };
+      if (sk.sourceImage && sk.sourceImage.file) { const f = zip && zip.file(sk.sourceImage.file); rec.sourceImage = f ? new Blob([await f.async('arraybuffer')], { type: sk.sourceImage.type || 'image/jpeg' }) : null; }
+      rec.edges = (rec.edges || []).map(e => ({ ...e, aufmassId: e.aufmassId ? nid(e.aufmassId) : null }));
+      rec.faces = (rec.faces || []).map(f => ({ ...f, aufmassId: f.aufmassId ? nid(f.aufmassId) : null }));
+      await db.put('sketches', rec);
+    }
     if (proj.coverPhotoId) proj.coverPhotoId = nid(proj.coverPhotoId);
     await db.put('projects', proj); n++;
   }
