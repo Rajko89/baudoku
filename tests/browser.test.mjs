@@ -176,8 +176,9 @@ try {
   assert.ok(left.notes.includes('p-keep'));
   assert.ok(left.aufmass.includes('p-keep'));
 
-  await page.getByText('Neubau Keep').click();
-  await page.locator('button[data-tab="sketches"]').click();
+  await page.getByText('Neubau Keep', { exact: true }).click();
+  await page.locator('button[data-tab="aufmass"]').click();
+  await page.locator('#openSketch').click();
   await page.waitForSelector('text=Bild wählen');
   await page.locator('#in-sketch').setInputFiles(pngPath);
   try {
@@ -245,7 +246,7 @@ try {
   await traufe.locator('[data-k="menge"]').blur();
   await page.waitForSelector('text=42,00');
   assert.match(await page.locator('#amlist').innerText(), /42,00/);
-  await page.locator('button[data-tab="sketches"]').click();
+  await page.locator('#openSketch').click();
   await page.locator('.card', { hasText: 'Skizze' }).click();
   await page.waitForFunction(() => (document.querySelector('#skCalc')?.textContent || '').includes('42,00'));
 
@@ -296,7 +297,8 @@ try {
   await page.waitForSelector('text=importiert');
   await page.waitForSelector('text=Neubau Keep (Import)');
   await page.getByText('Neubau Keep (Import)').click();
-  await page.locator('button[data-tab="sketches"]').click();
+  await page.locator('button[data-tab="aufmass"]').click();
+  await page.locator('#openSketch').click();
   await page.waitForSelector('text=Skizze');
   await page.locator('button[data-tab="aufmass"]').click();
   await page.waitForFunction(() => {
@@ -304,6 +306,79 @@ try {
     const vals = [...document.querySelectorAll('#amlist input')].map((i) => i.value).join(' ');
     return /Dachfläche F1/.test(t + vals);
   });
+
+  await page.locator('.hdr button[aria-label="Zurück"]').click();
+  await page.getByText('Neubau Keep', { exact: true }).click();
+  await page.locator('button[data-tab="photos"]').click();
+  await page.waitForSelector('text=Foto aufnehmen');
+  await page.locator('#in-gallery').setInputFiles(pngPath);
+  await page.waitForSelector('[data-draw]');
+  const photoId = await page.locator('[data-draw]').getAttribute('data-draw');
+  const before = await page.evaluate(async (id) => {
+    const ph = await window.__baudoku.db.get('photos', id);
+    const buf = new Uint8Array(await ph.original.arrayBuffer());
+    const stamp = new Uint8Array(await ph.stamped.arrayBuffer());
+    return { size: buf.length, head: [...buf.slice(0, 12)].join(','), stamp: stamp.length };
+  }, photoId);
+  await page.locator('[data-draw]').click();
+  await page.waitForSelector('#drawCanvas');
+  await page.waitForFunction(() => { const r = document.querySelector('#drawCanvas')?.getBoundingClientRect(); return r && r.height > 120; });
+  const box = await page.locator('#draw-undo').boundingBox();
+  if (!(box && box.height >= 48)) throw new Error('undo target ' + JSON.stringify(box));
+  const at = async (nx, ny) => page.evaluate(([x, y]) => window.__baudoku.draw.clientPoint(x, y), [nx, ny]);
+  const stroke = async (pts) => {
+    const c = page.locator('#drawCanvas');
+    const fire = (type, p) => c.dispatchEvent(type, { clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1 });
+    await fire('pointerdown', pts[0]);
+    for (const p of pts.slice(1)) await fire('pointermove', p);
+    await fire('pointerup', pts[pts.length - 1]);
+  };
+  await stroke([await at(0.2, 0.3), await at(0.45, 0.35), await at(0.7, 0.55)]);
+  await page.locator('#draw-line').click();
+  await stroke([await at(0.15, 0.8), await at(0.85, 0.2)]);
+  await page.locator('#draw-pen').click();
+  await stroke([await at(0.3, 0.7), await at(0.5, 0.5), await at(0.6, 0.75)]);
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 3);
+  const kinds = await page.evaluate(() => window.__baudoku.draw.strokes());
+  if (kinds[0].tool !== 'pen' || kinds[0].n < 3) throw new Error('pen ' + JSON.stringify(kinds));
+  if (kinds[1].tool !== 'line' || kinds[1].n !== 2) throw new Error('line ' + JSON.stringify(kinds));
+  await page.screenshot({ path: join(art, 'baudoku-draw-on-photo.png') });
+  await page.locator('#draw-photo').click();
+  await page.waitForFunction(() => /Foto an/.test(document.querySelector('#draw-photo').innerText));
+  if (await page.evaluate(() => window.__baudoku.draw.count()) !== 3) throw new Error('hide dropped strokes');
+  await page.screenshot({ path: join(art, 'baudoku-draw-hidden.png') });
+  await page.locator('#draw-photo').click();
+  await page.waitForFunction(() => /Foto aus/.test(document.querySelector('#draw-photo').innerText));
+  await page.locator('#draw-undo').click();
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 2);
+  await page.screenshot({ path: join(art, 'baudoku-draw-after-undo.png') });
+  await page.locator('#draw-undo').click();
+  await page.locator('#draw-undo').click();
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 0);
+  await page.locator('#draw-pen').click();
+  await stroke([await at(0.25, 0.25), await at(0.6, 0.4)]);
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 1);
+  await page.waitForFunction(async (id) => {
+    const ph = await window.__baudoku.db.get('photos', id);
+    return ph.markup?.strokes?.length === 1;
+  }, photoId);
+  await page.reload();
+  await page.waitForSelector('#draw-undo');
+  await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.count() === 1);
+  const after = await page.evaluate(async (id) => {
+    const ph = await window.__baudoku.db.get('photos', id);
+    const buf = new Uint8Array(await ph.original.arrayBuffer());
+    const stamp = new Uint8Array(await ph.stamped.arrayBuffer());
+    return { size: buf.length, head: [...buf.slice(0, 12)].join(','), stamp: stamp.length, strokes: ph.markup.strokes.length };
+  }, photoId);
+  if (after.size !== before.size || after.head !== before.head || after.stamp !== before.stamp) throw new Error('photo bytes changed ' + JSON.stringify({ before, after }));
+  if (after.strokes !== 1) throw new Error('strokes not stored');
+  await page.locator('#drawBack').click();
+  await page.locator('.hdr button[aria-label="Zurück"]').click();
+  await page.locator('button[data-tab="export"]').click();
+  await page.locator('#mkPdf').click();
+  const drawPdf = await Promise.all([page.waitForEvent('download'), page.locator('#pdfOut [data-act="download"]').click()]).then((x) => x[0]);
+  await drawPdf.saveAs(join(art, 'baudoku-draw-export.pdf'));
 
   assert.deepEqual(errors, [], errors.join('\n'));
   await context.close();
