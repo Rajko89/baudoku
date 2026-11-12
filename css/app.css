@@ -125,7 +125,19 @@ a{color:var(--accent-d)}
 body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 .plist .del{flex:none;align-self:center;min-height:48px;padding:0 12px}
 .am-row pre.calc{grid-column:1/-1;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:.75rem;background:#f4f6f8;border-radius:10px;padding:8px;margin:0}
-.tabs button{font-size:.72rem}
+.pgrid .ph .draw-hit{position:absolute;top:4px;right:4px;z-index:2;width:48px;height:48px;border:0;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:1.35rem;display:flex;align-items:center;justify-content:center}
+.pgrid .ph .tag.ink{top:6px;left:auto;right:56px;background:var(--accent)}
+.pgrid .ph .tag.m{top:56px}
+.draw{position:fixed;inset:0;z-index:40;background:#111;color:#fff;display:flex;flex-direction:column}
+.draw .hdr{position:relative}
+.draw canvas{flex:1;width:100%;min-height:160px;touch-action:none;display:block;background:#fff}
+.draw-tools{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:8px 8px calc(8px + var(--safe-b));background:#1f2933}
+.draw-tools button{min-height:64px;border:0;border-radius:14px;background:#2f3b47;color:#fff;font-size:1rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer}
+.draw-tools button span{font-size:1.4rem}
+.draw-tools button b{font-weight:700}
+.draw-tools button.on{background:var(--accent)}
+.draw-tools button:disabled{opacity:.4}
+body:has(.draw) .toast{top:calc(70px + var(--safe-t));bottom:auto}
 .sk{position:fixed;inset:0;z-index:40;background:#111;color:#fff;display:flex;flex-direction:column}
 .sk .hdr{position:relative}
 .sk canvas{flex:1;width:100%;min-height:120px;touch-action:none;display:block}
