@@ -9,7 +9,8 @@ Mobile Web-App für Kalkulation/Bauleitung im Dachdeckerhandwerk. Rein statisch 
 - **Notizen** mit Zeitstempel, optional mit Foto verknüpft.
 - **Foto-Aufmaß**: Maßstab (Referenzstrecke) oder 4-Punkt-Perspektive (Referenzrechteck, Homographie); Längen (Polylinien) und Flächen (Polygone) in m / m²; Dachneigungskorrektur (÷ cos α) für Draufsichten; Punkte verschiebbar mit Lupe; Zoom per Pinch/Mausrad; entzerrte Draufsicht als neues Foto.
 - **Aufmaß-Liste** je Projekt (Pos., Bezeichnung, Menge, Einheit), manuell editierbar, Rechenausdrücke (`2*3,5+1,25`). Keine pauschale Summe über unterschiedliche Maße. Eine Gesamtfläche nur aus ausdrücklich gewählten, gleichartigen m²-Flächen.
-- **Zeichnen auf dem Foto**: in der Foto-Übersicht ✎ tippen. Stift und Gerade, **Rückgängig** (mehrfach), Foto ausblenden und wieder einblenden. Striche liegen getrennt vom Foto; das Original bleibt unverändert. Im PDF liegen die Striche über dem Foto.
+- **Zeichnen auf dem Foto**: in Fotos auf **Zeichnen** tippen. Stift, Gerade, **Rückgängig** (mehrfach), Foto aus- und einblenden. Striche getrennt vom Foto.
+- **Freie Skizze**: im Reiter **Skizze** „Freie Skizze (leeres Blatt)“. Mehrere Blätter je Projekt, Titel optional, löschbar, im PDF und im ZIP.
 - **Flächenskizze** (im Aufmaß): Umriss mit Kanten a, b, c und Flächen F1, F2 …, lokale Kantenvorschläge ohne erfundene Meter, Rechenweg für Rechteck, Dreieck, Trapez, zusammengesetzte Flächen und Abzüge. Grundriss und geneigte Fläche bleiben getrennt.
 - **Projekt löschen**: in der Projektliste und beim Bearbeiten, erst nach Rückfrage mit dem Projektnamen. Optional ZIP-Backup. Gelöscht werden Fotos, Notizen, Aufmaß, Skizzen und Rechenwege nur dieses Projekts.
 - **PDF-Export** (jsPDF lokal): Deckblatt, Fotos mit Stempel + Beschreibung, Notizen, Aufmaß-Tabelle, bemaßte Skizzen mit demselben Rechenweg, Aufmaßbilder, Seitenzahlen. Firmenstempel nur, wenn in den Einstellungen ein Name steht.

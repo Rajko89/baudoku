@@ -309,10 +309,15 @@ try {
 
   await page.locator('.hdr button[aria-label="Zurück"]').click();
   await page.getByText('Neubau Keep', { exact: true }).click();
+  await page.locator('button[data-tab="sketches"]').click();
+  await page.locator('h2', { hasText: 'Skizze' }).first().waitFor();
+  await page.waitForSelector('text=Flächenskizze');
   await page.locator('button[data-tab="photos"]').click();
   await page.waitForSelector('text=Foto aufnehmen');
   await page.locator('#in-gallery').setInputFiles(pngPath);
   await page.waitForSelector('[data-draw]');
+  const zeichnenLabel = await page.locator('[data-draw]').innerText();
+  if (!/Zeichnen/.test(zeichnenLabel)) throw new Error('Zeichnen-Schaltfläche fehlt: ' + zeichnenLabel);
   const photoId = await page.locator('[data-draw]').getAttribute('data-draw');
   const before = await page.evaluate(async (id) => {
     const ph = await window.__baudoku.db.get('photos', id);
@@ -379,6 +384,42 @@ try {
   await page.locator('#mkPdf').click();
   const drawPdf = await Promise.all([page.waitForEvent('download'), page.locator('#pdfOut [data-act="download"]').click()]).then((x) => x[0]);
   await drawPdf.saveAs(join(art, 'baudoku-draw-export.pdf'));
+
+  await page.locator('button[data-tab="sketches"]').click();
+  await page.locator('#newSheet').click();
+  await page.locator('.modal input[name="title"]').fill('Blatt Nord');
+  await page.locator('.modal button[type="submit"]').click();
+  await page.waitForSelector('#drawCanvas');
+  await page.waitForFunction(() => { const r = document.querySelector('#drawCanvas')?.getBoundingClientRect(); return r && r.height > 120 && window.__baudoku.draw; });
+  const sheetAt = async (nx, ny) => page.evaluate(([x, y]) => window.__baudoku.draw.clientPoint(x, y), [nx, ny]);
+  const sheetStroke = async (pts) => {
+    const c = page.locator('#drawCanvas');
+    const fire = (type, p) => c.dispatchEvent(type, { clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1 });
+    await fire('pointerdown', pts[0]);
+    for (const p of pts.slice(1)) await fire('pointermove', p);
+    await fire('pointerup', pts[pts.length - 1]);
+  };
+  await sheetStroke([await sheetAt(0.2, 0.2), await sheetAt(0.5, 0.35), await sheetAt(0.8, 0.25)]);
+  await page.locator('#draw-line').click();
+  await sheetStroke([await sheetAt(0.2, 0.7), await sheetAt(0.8, 0.55)]);
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 2);
+  await page.locator('#draw-undo').click();
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 1);
+  await page.screenshot({ path: join(art, 'baudoku-freie-skizze.png') });
+  const sheetUrl = page.url();
+  await page.reload();
+  await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.count() === 1);
+  if (!/Blatt Nord/.test(await page.locator('#drawTitle').innerText())) throw new Error('Titel fehlt nach Reload');
+  await page.locator('#drawBack').click();
+  await page.waitForSelector('text=Blatt Nord');
+  await page.locator('button[data-tab="export"]').click();
+  await page.locator('#mkPdf').click();
+  const sheetPdf = await Promise.all([page.waitForEvent('download'), page.locator('#pdfOut [data-act="download"]').click()]).then((x) => x[0]);
+  const sheetPdfPath = join(art, 'baudoku-freie-skizze.pdf');
+  await sheetPdf.saveAs(sheetPdfPath);
+  const sheetPdfText = pdfText(readFileSync(sheetPdfPath));
+  if (!sheetPdfText.includes('Blatt Nord')) throw new Error('PDF ohne freie Skizze');
+  void sheetUrl;
 
   assert.deepEqual(errors, [], errors.join('\n'));
   await context.close();

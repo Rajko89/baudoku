@@ -125,9 +125,9 @@ a{color:var(--accent-d)}
 body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 .plist .del{flex:none;align-self:center;min-height:48px;padding:0 12px}
 .am-row pre.calc{grid-column:1/-1;white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:.75rem;background:#f4f6f8;border-radius:10px;padding:8px;margin:0}
-.pgrid .ph .draw-hit{position:absolute;top:4px;right:4px;z-index:2;width:48px;height:48px;border:0;border-radius:12px;background:rgba(0,0,0,.6);color:#fff;font-size:1.35rem;display:flex;align-items:center;justify-content:center}
-.pgrid .ph .tag.ink{top:6px;left:auto;right:56px;background:var(--accent)}
-.pgrid .ph .tag.m{top:56px}
+.shot{display:flex;flex-direction:column;gap:6px}
+.draw-label{min-height:52px;font-size:1rem}
+.tabs button{font-size:.74rem;padding:0 1px}
 .draw{position:fixed;inset:0;z-index:40;background:#111;color:#fff;display:flex;flex-direction:column}
 .draw .hdr{position:relative}
 .draw canvas{flex:1;width:100%;min-height:160px;touch-action:none;display:block;background:#fff}
@@ -138,6 +138,7 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 .draw-tools button.on{background:var(--accent)}
 .draw-tools button:disabled{opacity:.4}
 body:has(.draw) .toast{top:calc(70px + var(--safe-t));bottom:auto}
+#sw-update{position:fixed;top:0;left:0;right:0;z-index:200;min-height:56px;border:0;background:var(--accent);color:#fff;font:inherit;font-weight:700;font-size:1.05rem;padding:12px 16px;cursor:pointer}
 .sk{position:fixed;inset:0;z-index:40;background:#111;color:#fff;display:flex;flex-direction:column}
 .sk .hdr{position:relative}
 .sk canvas{flex:1;width:100%;min-height:120px;touch-action:none;display:block}
