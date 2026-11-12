@@ -11,6 +11,7 @@ import { emptySketch, mountSketch, resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
+const APP_VERSION = 'baudoku-v1.4.0';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true };
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
@@ -37,6 +38,7 @@ async function route() {
     if (parts[0] === 'measure') return await viewMeasure(parts[1]);
     if (parts[0] === 'sketch') return await viewSketch(parts[1]);
     if (parts[0] === 'draw') return await viewDraw(parts[1]);
+    if (parts[0] === 'sheet') return await viewSheet(parts[1]);
     go('#/');
   } catch (e) { console.error(e); APP.innerHTML = `<main><div class="card">Fehler: ${esc(e.message)}</div><a class="btn" href="#/">Zur Übersicht</a></main>`; }
 }
@@ -47,6 +49,8 @@ APP.addEventListener('click', e => {
   if (del) { e.preventDefault(); e.stopPropagation(); deleteProjectFlow(del.dataset.delProject); return; }
   const draw = e.target.closest('[data-draw]');
   if (draw) { e.preventDefault(); e.stopPropagation(); go('#/draw/' + draw.dataset.draw); return; }
+  const delSheet = e.target.closest('[data-del-sheet]');
+  if (delSheet) { e.preventDefault(); e.stopPropagation(); deleteSheetFlow(delSheet.dataset.delSheet); return; }
   const n = e.target.closest('[data-nav]'); if (n) { e.preventDefault(); go(n.dataset.nav); }
 });
 
@@ -154,10 +158,11 @@ async function restamp(ph) {
 /* ---------- Projektansicht mit Tabs ---------- */
 async function viewProject(pid, tab, q) {
   const p = await db.get('projects', pid); if (!p) return go('#/');
-  const [photos, notes, am, sketches] = await Promise.all([db.byProject('photos', pid), db.byProject('notes', pid), db.byProject('aufmass', pid), db.byProject('sketches', pid)]);
+  const [photos, notes, am, sketches, sheets] = await Promise.all([db.byProject('photos', pid), db.byProject('notes', pid), db.byProject('aufmass', pid), db.byProject('sketches', pid), db.byProject('sheets', pid)]);
+  sheets.sort((a, b) => (b.updated || 0) - (a.updated || 0));
   photos.sort((a, b) => a.time - b.time || a.created - b.created); notes.sort((a, b) => b.created - a.created); am.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const no = new Map(photos.map((x, i) => [x.id, i + 1]));
-  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['export', '📄', 'Export', '']];
+  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['sketches', '✏️', 'Skizze', sketches.length], ['export', '📄', 'Export', '']];
   APP.innerHTML = header(p.name, { back: '#/', sub: [p.kunde, p.adresse].filter(Boolean).join(' · ') || (p.bvnr ? 'BV ' + p.bvnr : ''), right: `<button class="ib" data-nav="#/p/${pid}/edit" aria-label="Bearbeiten">✎</button>` }) +
     `<main id="tab"></main><nav class="tabs">${tabs.map(([k, i, l, c]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}${c !== '' ? ` (${c})` : ''}</button>`).join('')}</nav>`;
   $$('.tabs button').forEach(b => b.onclick = () => history.replaceState(null, '', `#/p/${pid}?tab=${b.dataset.tab}`) || route());
@@ -167,7 +172,7 @@ async function viewProject(pid, tab, q) {
   if (tab === 'photos') {
     startGeo(); cleanup.push(stopGeo);
     T.innerHTML = `<div class="gps"><span class="dot" id="gdot"></span><span id="gtxt">GPS wird gesucht …</span></div>
-      <div class="pgrid">${photos.map((x, i) => `<div class="ph" data-nav="#/photo/${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span>${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}${x.markup?.strokes?.length ? `<span class="tag ink">✎</span>` : ''}<button type="button" class="draw-hit" data-draw="${x.id}" aria-label="Zeichnen">✎</button><div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div>`).join('')}</div>
+      <div class="pgrid">${photos.map((x, i) => `<div class="shot"><div class="ph" data-nav="#/photo/${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span>${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}<div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div><button type="button" class="btn block draw-label" data-draw="${x.id}">✎ Zeichnen</button></div>`).join('')}</div>
       ${photos.length ? '' : '<div class="empty">Noch keine Fotos.<br>Foto aufnehmen oder aus der Galerie wählen.</div>'}
       <div class="actions-sticky"><button class="btn primary block" id="bCam" style="min-height:64px;font-size:1.1rem">📷 Foto aufnehmen</button>
       <div class="grid2" style="margin-top:8px"><button class="btn" id="bLive">🎥 Live-Kamera (Serie)</button><button class="btn" id="bGal">🖼 Aus Galerie</button></div></div>`;
@@ -249,10 +254,14 @@ async function viewProject(pid, tab, q) {
   }
 
   if (tab === 'sketches') {
-    T.innerHTML = `<p class="small">Foto, Luftbild oder Google-Earth-Screenshot. Maße entstehen nur aus eingegebenen Werten, einer Referenzlänge auf einer Draufsicht oder einem Referenzrechteck. Ein normales Foto wird nicht als maßstäbliche Draufsicht behandelt.</p>
+    T.innerHTML = `<h2 class="sec" style="text-transform:none;color:inherit;font-size:1.25rem">Skizze</h2>
+      <button class="btn primary block" id="newSheet">Freie Skizze (leeres Blatt)</button>
+      <div id="sheetList" style="margin-top:10px">${sheets.map(s => `<div class="card" style="display:flex;align-items:center;gap:8px"><div class="meta" style="flex:1" data-nav="#/sheet/${s.id}"><div class="t">${esc(s.title || 'Freie Skizze')}</div><div class="small">${(s.strokes || []).length} Striche</div></div><button type="button" class="btn danger del" data-del-sheet="${s.id}">Löschen</button></div>`).join('') || '<p class="small">Noch kein leeres Blatt.</p>'}
+      <h3 class="sec">Flächenskizze</h3><p class="small">Dachflächen mit Kanten a, b, c. Freihand auf einem Foto: in Fotos auf <b>Zeichnen</b> tippen. Maße nur aus eingegebenen Werten, einer Referenzlänge oder einem Referenzrechteck.</p>
       <div class="grid2"><button class="btn primary" id="skCam">📷 Aufnehmen</button><button class="btn" id="skGal">🖼 Bild wählen</button></div>
       <div id="skList" style="margin-top:12px">${sketches.map(s => `<div class="card" data-nav="#/sketch/${s.id}"><div class="meta"><div class="t">${esc(s.title || 'Skizze')}</div><div class="small">${(s.faces || []).length} Flächen · ${(s.edges || []).length} Kanten</div></div></div>`).join('') || '<div class="empty">Noch keine Skizze.</div>'}
       ${photos.length ? `<h3 class="sec">Vorhandenes Foto</h3><div class="pgrid">${photos.map((x, i) => `<button type="button" class="ph" data-use-photo="${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span></button>`).join('')}</div>` : ''}</div>`;
+    $('#newSheet').onclick = () => newSheet(pid);
     const cam = $('#in-sketch-cam'), gal = $('#in-sketch');
     $('#skCam').onclick = () => cam.click();
     $('#skGal').onclick = () => gal.click();
@@ -274,15 +283,16 @@ async function viewProject(pid, tab, q) {
       <label class="chk"><input type="checkbox" id="oNo" checked> Notizen (${notes.length})</label>
       <label class="chk"><input type="checkbox" id="oAm" checked> Aufmaß-Tabelle (${am.length})</label>
       <label class="chk"><input type="checkbox" id="oMi" checked> Aufmaß-Bilder mit Bemaßung (${photos.filter(x => x.measure?.items?.length).length})</label>
-      <label class="chk"><input type="checkbox" id="oSk" checked> Skizzen und Rechenwege (${sketches.length})</label>
+      <label class="chk"><input type="checkbox" id="oSk" checked> Flächenskizzen und Rechenwege (${sketches.length})</label>
+      <label class="chk"><input type="checkbox" id="oSheet" checked> Freie Skizzen (${sheets.length})</label>
       <button class="btn primary block" id="mkPdf" style="margin-top:8px">📄 PDF erstellen</button><div id="pdfOut" style="margin-top:10px"></div></div>
       <div class="card"><h3 style="margin:0 0 8px">Datensicherung</h3><p class="small">Projekt mit allen Fotos, Skizzen, Ausgangsbildern, Notizen, Aufmaß und Rechenwegen als ZIP sichern. Import über ⚙ Einstellungen.</p>
       <button class="btn block" id="mkZip">💾 Projekt-Backup (ZIP)</button><div id="zipOut" style="margin-top:10px"></div></div>`;
     $('#mkPdf').onclick = async () => {
       const b = $('#mkPdf'); b.disabled = true; const out = $('#pdfOut'); out.textContent = 'PDF wird erstellt …';
       try {
-        const opts = { includePhotos: $('#oPh').checked, stamped: $('#oSt').checked, includeNotes: $('#oNo').checked, includeAufmass: $('#oAm').checked, includeMeasureImgs: $('#oMi').checked, includeSketches: $('#oSk').checked };
-        const blob = await buildPdf({ project: p, photos, notes, aufmass: am, sketches, settings: s, opts, progress: t => out.textContent = 'PDF wird erstellt … ' + t });
+        const opts = { includePhotos: $('#oPh').checked, stamped: $('#oSt').checked, includeNotes: $('#oNo').checked, includeAufmass: $('#oAm').checked, includeMeasureImgs: $('#oMi').checked, includeSketches: $('#oSk').checked, includeSheets: $('#oSheet').checked };
+        const blob = await buildPdf({ project: p, photos, notes, aufmass: am, sketches, sheets, settings: s, opts, progress: t => out.textContent = 'PDF wird erstellt … ' + t });
         const name = `Baudoku_${safeName(p.name)}_${isoDate()}.pdf`;
         window.__baudoku.lastPdf = blob;
         showFileActions(out, blob, name, `Baudokumentation ${p.name}`);
@@ -414,7 +424,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.3 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.4 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');
@@ -433,6 +443,29 @@ async function viewSettings() {
   $('#inst').onclick = async () => { if (installEvt) { installEvt.prompt(); installEvt = null; } };
 }
 
+async function newSheet(pid) {
+  const r = await modal({ title: 'Freie Skizze', html: '<p>Leeres Blatt zum Zeichnen. Der Titel ist freiwillig.</p>', fields: [{ name: 'title', label: 'Titel (optional)', placeholder: 'Freie Skizze' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Blatt anlegen', value: 'ok', cls: 'primary' }] });
+  if (!r) return;
+  const all = await db.byProject('sheets', pid);
+  const sheet = { id: uid(), projectId: pid, created: Date.now(), updated: Date.now(), title: (r.title || '').trim() || `Freie Skizze ${all.length + 1}`, width: 1000, height: 1400, strokes: [] };
+  await db.put('sheets', sheet);
+  await touchProject(pid);
+  go(`#/sheet/${sheet.id}`);
+}
+async function deleteSheetFlow(id) {
+  const s = await db.get('sheets', id); if (!s) return;
+  if (!await confirmDlg('Skizze löschen?', `„${s.title || 'Freie Skizze'}“ wird gelöscht. Das Projekt und die Fotos bleiben.`)) return;
+  await db.del('sheets', id);
+  toast('Skizze gelöscht');
+  go(`#/p/${s.projectId}?tab=sketches`);
+}
+async function viewSheet(id) {
+  const sheet = await db.get('sheets', id); if (!sheet) return go('#/');
+  APP.innerHTML = '<div id="drawroot"></div>';
+  const ed = mountDraw($('#drawroot'), { sheet, onBack: () => go(`#/p/${sheet.projectId}?tab=sketches`) });
+  cleanup.push(() => ed.destroy());
+  window.__baudoku.draw = ed;
+}
 async function viewDraw(id) {
   const ph = await db.get('photos', id); if (!ph) return go('#/');
   const blob = ph.stamped || ph.original;
@@ -460,10 +493,32 @@ async function viewSketch(id) {
 }
 
 /* ---------- Start ---------- */
+function showUpdateBar(reg) {
+  if (document.getElementById('sw-update')) return;
+  const bar = document.createElement('button');
+  bar.id = 'sw-update'; bar.type = 'button'; bar.textContent = 'Neue Version – neu laden';
+  bar.onclick = () => { const w = reg.waiting; if (w) w.postMessage('skip-waiting'); else location.reload(); };
+  document.body.appendChild(bar);
+}
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   // Relativ zur Seite, Scope = Verzeichnis der App (funktioniert unter /baudoku/ und an der Domain-Wurzel).
   const scopeUrl = new URL('./', document.baseURI);
   const swUrl = new URL('sw.js', scopeUrl);
-  navigator.serviceWorker.register(swUrl, { scope: scopeUrl.href }).catch(e => console.warn('SW', e));
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    location.reload();
+  });
+  navigator.serviceWorker.register(swUrl, { scope: scopeUrl.href }).then((reg) => {
+    const poke = () => { if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar(reg); };
+    poke();
+    reg.addEventListener('updatefound', () => {
+      const nw = reg.installing; if (!nw) return;
+      nw.addEventListener('statechange', () => { if (nw.state === 'installed') poke(); });
+    });
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data?.type === 'NEW_VERSION' && e.data.version !== APP_VERSION) showUpdateBar(reg);
+    });
+  }).catch(e => console.warn('SW', e));
 }
 route();

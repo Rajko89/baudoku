@@ -1,7 +1,7 @@
 // Service Worker: App-Shell offline verfügbar (Cache-first), Daten liegen in IndexedDB.
 // Alle URLs werden relativ zum Skript aufgelöst, damit die App unter einem Unterpfad
 // (z. B. https://rajko89.github.io/baudoku/) funktioniert.
-const VERSION = 'baudoku-v1.3.0';
+const VERSION = 'baudoku-v1.4.0';
 const ASSET_PATHS = [
   './',
   './index.html',
@@ -38,18 +38,30 @@ self.addEventListener('activate', (e) => {
     caches.keys()
       .then((ks) => Promise.all(ks.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
+      .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
+      .then((cs) => cs.forEach((c) => c.postMessage({ type: 'NEW_VERSION', version: VERSION })))
   );
+});
+self.addEventListener('message', (e) => {
+  if (e.data === 'skip-waiting') self.skipWaiting();
 });
 self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (e.request.method !== 'GET' || u.origin !== self.location.origin) return; // z. B. Nominatim: direkt ans Netz
-  e.respondWith(
-    caches.match(e.request, { ignoreSearch: true }).then((r) => r || fetch(e.request).then((res) => {
-      if (res.ok) {
-        const cp = res.clone();
-        caches.open(VERSION).then((c) => c.put(e.request, cp));
-      }
+  if (u.pathname.endsWith('/sw.js')) return; // Update-Prüfung darf nicht aus dem App-Cache kommen
+  e.respondWith((async () => {
+    const cache = await caches.open(VERSION);
+    const hit = await cache.match(e.request, { ignoreSearch: true });
+    if (hit) return hit;
+    try {
+      const res = await fetch(e.request);
+      if (res.ok && res.type === 'basic') cache.put(e.request, res.clone());
       return res;
-    }).catch(() => (e.request.mode === 'navigate' ? caches.match(assetUrl('./index.html')) : Response.error())))
-  );
+    } catch (err) {
+      if (e.request.mode === 'navigate') {
+        return (await cache.match(assetUrl('./index.html'))) || (await cache.match(assetUrl('./'))) || Response.error();
+      }
+      return Response.error();
+    }
+  })());
 });

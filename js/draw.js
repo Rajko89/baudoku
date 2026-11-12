@@ -36,21 +36,31 @@ export function renderMarkup(img, markup, { hidePhoto = false, max = 1600 } = {}
   return c;
 }
 
-export function mountDraw(root, { photo, img, onBack }) {
-  const strokes = (photo.markup?.strokes || []).map((s) => ({ ...s, points: (s.points || []).map((p) => [...p]) }));
-  let hidePhoto = !!photo.markup?.hidePhoto;
+export function blankCanvas(w = 1000, h = 1400) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, w, h);
+  return c;
+}
+
+export function mountDraw(root, { photo, sheet, img, onBack }) {
+  const blank = !photo;
+  img = img || blankCanvas(sheet?.width || 1000, sheet?.height || 1400);
+  const strokes = ((blank ? sheet.strokes : photo.markup?.strokes) || []).map((s) => ({ ...s, points: (s.points || []).map((p) => [...p]) }));
+  let hidePhoto = blank || !!photo.markup?.hidePhoto;
   let tool = 'pen';
   let active = null;
   let view = { s: 1, ox: 0, oy: 0 };
   const el = document.createElement('div');
   el.className = 'draw';
-  el.innerHTML = `<header class="hdr"><button type="button" class="ib" id="drawBack" aria-label="Zurück">←</button><h1>Zeichnen</h1></header>
+  el.innerHTML = `<header class="hdr"><button type="button" class="ib" id="drawBack" aria-label="Zurück">←</button><h1 id="drawTitle">${blank ? (sheet.title || 'Freie Skizze') : 'Zeichnen'}</h1>${blank ? '<button type="button" class="ib" id="drawRename" aria-label="Titel">Aa</button>' : ''}</header>
     <canvas id="drawCanvas"></canvas>
     <div class="draw-tools">
       <button type="button" id="draw-pen" class="on"><span>✎</span>Stift</button>
       <button type="button" id="draw-line"><span>／</span>Linie</button>
       <button type="button" id="draw-undo"><span>↩</span>Rückgängig</button>
-      <button type="button" id="draw-photo"><span>▣</span><b>Foto aus</b></button>
+      ${blank ? '' : '<button type="button" id="draw-photo"><span>▣</span><b>Foto aus</b></button>'}
     </div>`;
   root.appendChild(el);
   const canvas = el.querySelector('#drawCanvas');
@@ -78,8 +88,10 @@ export function mountDraw(root, { photo, img, onBack }) {
     const shown = active ? strokes.concat([active]) : strokes;
     drawStrokes(ctx, shown.map((s) => ({ ...s, points: s.points.map((p) => [view.ox / canvas.width + p[0] * view.iw * view.s / canvas.width, view.oy / canvas.height + p[1] * view.ih * view.s / canvas.height]) })), canvas.width, canvas.height);
     undoBtn.disabled = !strokes.length;
-    photoBtn.classList.toggle('on', hidePhoto);
-    photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus';
+    if (photoBtn) {
+      photoBtn.classList.toggle('on', hidePhoto);
+      photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus';
+    }
     el.querySelector('#draw-pen').classList.toggle('on', tool === 'pen');
     el.querySelector('#draw-line').classList.toggle('on', tool === 'line');
   }
@@ -93,9 +105,10 @@ export function mountDraw(root, { photo, img, onBack }) {
     y = Math.max(0, Math.min(1, y));
     return [x, y];
   }
+  const pack = () => strokes.map((s) => ({ tool: s.tool, color: s.color, width: s.width, points: s.points.map((p) => [p[0], p[1]]) }));
   async function persist() {
-    photo.markup = { strokes: strokes.map((s) => ({ tool: s.tool, color: s.color, width: s.width, points: s.points.map((p) => [p[0], p[1]]) })), hidePhoto };
-    await db.put('photos', photo);
+    if (blank) { sheet.strokes = pack(); sheet.updated = Date.now(); await db.put('sheets', sheet); }
+    else { photo.markup = { strokes: pack(), hidePhoto }; await db.put('photos', photo); }
   }
   function pushActive() {
     if (!active || active.points.length < 2 && active.tool === 'line') { active = null; return; }
@@ -128,7 +141,16 @@ export function mountDraw(root, { photo, img, onBack }) {
   el.querySelector('#draw-pen').onclick = () => { tool = 'pen'; paint(); };
   el.querySelector('#draw-line').onclick = () => { tool = 'line'; paint(); };
   undoBtn.onclick = async () => { if (!strokes.length) return; strokes.pop(); await persist(); paint(); };
-  photoBtn.onclick = async () => { hidePhoto = !hidePhoto; await persist(); paint(); };
+  if (photoBtn) photoBtn.onclick = async () => { hidePhoto = !hidePhoto; await persist(); paint(); };
+  const rename = el.querySelector('#drawRename');
+  if (rename) rename.onclick = async () => {
+    const { modal } = await import('./util.js');
+    const r = await modal({ title: 'Titel', fields: [{ name: 'title', label: 'Titel (optional)', value: sheet.title || '' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Speichern', value: 'ok', cls: 'primary' }] });
+    if (!r) return;
+    sheet.title = (r.title || '').trim() || 'Freie Skizze';
+    el.querySelector('#drawTitle').textContent = sheet.title;
+    await persist();
+  };
   el.querySelector('#drawBack').onclick = () => onBack();
   let roLock = false;
   const ro = new ResizeObserver(() => {
