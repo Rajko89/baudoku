@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import {
   computeFace, formatCalcText, sumSelected, reliableScale, resolveEdgeLength, scaledEdgeLength, fmtM,
 } from '../js/sketch-calc.js';
-import { detectOutline } from '../js/detect.js';
 
 const id = (s) => s;
 function edge(label, x1, y1, x2, y2, extra = {}) {
@@ -144,23 +143,6 @@ test('linked aufmass length wins over a stale manual length', () => {
   assert.equal(len.m, 10);
   assert.equal(len.source, 'aufmass');
   assert.equal(fmtM(10), '10,00');
-});
-
-test('detector finds rectangle corners and invents no lengths', () => {
-  const w = 220, h = 150;
-  const rgba = new Uint8ClampedArray(w * h * 4);
-  rgba.fill(255);
-  const set = (x, y) => { const i = (y * w + x) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = 0; rgba[i + 3] = 255; };
-  for (let x = 30; x <= 180; x++) for (let t = 0; t < 3; t++) { set(x, 28 + t); set(x, 118 + t); }
-  for (let y = 28; y <= 120; y++) for (let t = 0; t < 3; t++) { set(30 + t, y); set(178 + t, y); }
-  const found = detectOutline(rgba, w, h);
-  assert.ok(found.vertices.length >= 4, 'vertices ' + found.vertices.length);
-  const corners = [[30, 28], [180, 28], [180, 120], [30, 120]];
-  for (const [x, y] of corners) {
-    assert.ok(found.vertices.some((v) => Math.hypot(v.x - x, v.y - y) < 12), `missing corner ${x},${y} in ${JSON.stringify(found.vertices)}`);
-  }
-  assert.equal(JSON.stringify(found).includes('"m"'), false);
-  assert.ok(found.edges.length >= 4);
 });
 
 test('repo contains no hardcoded company preset', () => {

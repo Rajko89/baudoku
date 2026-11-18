@@ -203,6 +203,24 @@ try {
     await page.waitForFunction(() => (window.__baudoku.draw.faces()[0]?.text || '').includes('0,50'));
 
     if (tag === 'phone') {
+      await sheet('Trapez');
+      const trap = [[0.2, 0.3], [0.8, 0.3], [0.62, 0.68], [0.2, 0.68]];
+      await poly(trap, '#draw-line');
+      await page.waitForFunction(() => window.__baudoku.draw.edges() === 4 && window.__baudoku.draw.rights() >= 1);
+      await measure(0.5, 0.3, '8');
+      await measure(0.41, 0.68, '5');
+      await measure(0.2, 0.49, '3');
+      await page.locator('#draw-measure').click();
+      await gesture([await at(0.5, 0.3)]);
+      await page.locator('#btn-parallel').click();
+      await gesture([await at(0.41, 0.68)]);
+      await page.waitForFunction(() => {
+        const msg = document.querySelector('#drawMsg')?.textContent || '';
+        const face = window.__baudoku.draw.faces()[0]?.text || '';
+        return face.includes('19,50') && /Trapez/.test(msg) && /Formel/.test(msg) && /19,50/.test(msg);
+      });
+      await page.screenshot({ path: join(art, 'baudoku-trapez.png') });
+      if (!await page.locator('#drawForm').isHidden()) await page.locator('#drawForm button[type="submit"]').click();
       await page.evaluate(async (id) => {
         await window.__baudoku.db.put('aufmass', { id: 'am-keep', projectId: id, order: 1, pos: '01', bez: 'Ortgang bleibt', menge: 3, expr: '3', einheit: 'm' });
         await window.__baudoku.db.put('sheets', {
@@ -222,12 +240,30 @@ try {
             seq: [{ type: 'stroke', id: 's1' }, { type: 'edge', id: 'e1' }, { type: 'edge', id: 'e2' }, { type: 'edge', id: 'e3' }, { type: 'edge', id: 'e4' }],
           },
         });
+        await window.__baudoku.db.put('sketches', {
+          id: 'sk-old', projectId: id, title: 'Alte Fläche', created: 1, updated: 1, imgW: 1000, imgH: 1000, faces: [{ id: 'f1', label: 'F1', vertexIds: ['v1', 'v2', 'v3', 'v4'] }], viewKind: 'projection',
+          vertices: [{ id: 'v1', x: 100, y: 100 }, { id: 'v2', x: 500, y: 100 }, { id: 'v3', x: 500, y: 400 }, { id: 'v4', x: 100, y: 400 }],
+          edges: [
+            { id: 'oe1', v1: 'v1', v2: 'v2', label: 'a', lengthM: 6 },
+            { id: 'oe2', v1: 'v2', v2: 'v3', label: 'b', lengthM: 4 },
+            { id: 'oe3', v1: 'v3', v2: 'v4', label: 'c', lengthM: 6 },
+            { id: 'oe4', v1: 'v4', v2: 'v1', label: 'd', lengthM: 4 },
+          ],
+        });
       }, pid);
       await page.locator('#drawBack').click();
       await page.getByText('Bestand v1.5', { exact: true }).click();
       await page.waitForFunction(() => (window.__baudoku.draw?.faces()[0]?.text || '').includes('24,00'));
       const oldInk = await page.evaluate(() => window.__baudoku.draw.strokes().find((s) => s.tool === 'pen'));
       assert.equal(oldInk.color, '#e8590c');
+      await page.locator('#drawBack').click();
+      await page.getByText('Alte Fläche', { exact: true }).click();
+      await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.edges() === 4);
+      const kept = await page.evaluate(async () => {
+        const sk = await window.__baudoku.db.get('sketches', 'sk-old');
+        return sk.vertices.length === 4 && sk.edges[0].lengthM === 6 && sk.faces[0].label === 'F1';
+      });
+      if (!kept) throw new Error('alte Flächenskizze verändert');
       await page.locator('#drawBack').click();
       await page.locator('button[data-tab="aufmass"]').click();
       await page.waitForSelector('input[value="Ortgang bleibt"]');
