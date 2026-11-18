@@ -55,8 +55,8 @@ function splitEdge(doc, edgeId, x, y) {
   if (!e) return null;
   const n = { id: nid(doc, 'n'), x, y };
   doc.nodes.push(n);
-  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null };
-  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null };
+  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null, free: !!e.free };
+  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null, free: !!e.free };
   if (e.measure) {
     const chain = e.chain || nid(doc, 'c');
     e1.chain = chain; e2.chain = chain;
@@ -83,21 +83,30 @@ function place(doc, spec) {
   doc.nodes.push(n);
   return n.id;
 }
-export function addLine(doc, start, end) {
+function addRight(d, node, e1, e2) {
+  if (!node || !e1 || !e2 || e1 === e2) return;
+  if (!nodeById(d, node) || !edgeById(d, e1) || !edgeById(d, e2)) return;
+  const key = [e1, e2].sort().join('|');
+  d.rights = d.rights || [];
+  if (d.rights.some((r) => r.node === node && [r.e1, r.e2].sort().join('|') === key)) return;
+  d.rights.push({ id: nid(d, 'r'), node, e1, e2, fromSnap: true });
+}
+export function addLine(doc, start, end, opts = {}) {
   const d = clone(doc);
   const a = place(d, start);
   const b = place(d, end);
   if (a !== b && !d.edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) {
     const id = nid(d, 'e');
-    d.edges.push({ id, a, b, label: nextEdgeLabel(d), measure: null });
+    d.edges.push({ id, a, b, label: nextEdgeLabel(d), measure: null, free: !!opts.free });
     d.seq = [...(d.seq || []), { type: 'edge', id }];
+    if (!opts.free) for (const r of opts.rights || []) addRight(d, r.nodeId, id, r.edgeId);
   }
   return d;
 }
-export function addStroke(doc, points) {
+export function addStroke(doc, points, style = {}) {
   const d = clone(doc);
   const id = nid(d, 's');
-  d.strokes.push({ id, points: points.map((p) => [p[0], p[1]]) });
+  d.strokes.push({ id, points: points.map((p) => [p[0], p[1]]), width: style.width || 0.012, color: style.color || '#111111' });
   d.seq = [...(d.seq || []), { type: 'stroke', id }];
   return d;
 }
@@ -212,7 +221,7 @@ function rectangleEval(doc, ids, edges) {
   const area = lens[0] * lens[1];
   const steps = ['Fläche F1, Rechteck'];
   edges.forEach((e, i) => steps.push(`${e.label} = ${fmtNum(lens[i])} m${edgeMeters(e) == null ? ' (abgeleitet)' : ''}`));
-  steps.push('Formel: A = a x b');
+  steps.push(`Formel: A = ${edges[0].label} x ${edges[1].label}`);
   steps.push(`Rechnung: ${fmtNum(lens[0])} m x ${fmtNum(lens[1])} m = ${fmtNum(area)} m²`);
   return { ok: true, missing: [], contradictions: [], area, steps, parts: [{ label: 'F1', formula: 'A = a x b', result: area }], edgeNotes: edgeNotes(edges, lens) };
 }
@@ -438,8 +447,8 @@ export function importLegacyStrokes(strokes) {
   let doc = emptyDoc();
   for (const s of strokes || []) {
     const pts = s.points || [];
-    if (s.tool === 'line' && pts.length >= 2) doc = addLine(doc, { x: pts[0][0], y: pts[0][1] }, { x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] });
-    else if (pts.length >= 2) doc = addStroke(doc, pts);
+    if (s.tool === 'line' && pts.length >= 2) doc = addLine(doc, { x: pts[0][0], y: pts[0][1] }, { x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] }, { free: !!s.free });
+    else if (pts.length >= 2) doc = addStroke(doc, pts, { width: s.width || 0.012, color: s.color || '#e8590c' });
   }
   return doc;
 }
@@ -465,8 +474,184 @@ export function importLegacySketch(sketch, w, h) {
 export function legacyStrokes(doc) {
   const lines = (doc.edges || []).map((e) => {
     const a = nodeById(doc, e.a), b = nodeById(doc, e.b);
-    return a && b ? { tool: 'line', color: '#e8590c', width: 0.012, points: [[a.x, a.y], [b.x, b.y]] } : null;
+    return a && b ? { tool: 'line', color: e.free ? '#7048e8' : '#1f2933', width: 0.012, points: [[a.x, a.y], [b.x, b.y]], free: !!e.free } : null;
   }).filter(Boolean);
-  const pens = (doc.strokes || []).map((s) => ({ tool: 'pen', color: '#e8590c', width: 0.012, points: s.points }));
+  const pens = (doc.strokes || []).map((s) => ({ tool: 'pen', color: s.color || '#e8590c', width: s.width || 0.012, points: s.points }));
   return [...pens, ...lines];
+}
+
+export const ANGLE_TOL = 9 * Math.PI / 180;
+
+function wrapPi(a) {
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a < -Math.PI) a += Math.PI * 2;
+  return a;
+}
+export function angleSnap(doc, start, x, y, tol = ANGLE_TOL) {
+  const sx = start.x, sy = start.y;
+  const len = Math.hypot(x - sx, y - sy);
+  if (len < 1e-6) return null;
+  const ang = Math.atan2(y - sy, x - sx);
+  const connected = [];
+  if (start.nodeId && nodeById(doc, start.nodeId)) {
+    for (const e of doc.edges) {
+      if (e.a !== start.nodeId && e.b !== start.nodeId) continue;
+      const o = nodeById(doc, e.a === start.nodeId ? e.b : e.a);
+      if (!o) continue;
+      const base = Math.atan2(o.y - sy, o.x - sx);
+      connected.push({ edgeId: e.id, dirs: [base + Math.PI / 2, base - Math.PI / 2] });
+    }
+  }
+  let best = null;
+  const consider = (target, edgeId, pri) => {
+    const ad = Math.abs(wrapPi(ang - target));
+    if (ad > tol) return;
+    if (!best || ad < best.ad - 1e-9 || (Math.abs(ad - best.ad) <= 1e-9 && pri < best.pri)) best = { ad, target, edgeId, pri };
+  };
+  for (const c of connected) for (const t of c.dirs) consider(t, c.edgeId, 0);
+  for (const t of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) consider(t, null, 1);
+  if (!best) return null;
+  let edgeId = best.edgeId;
+  if (!edgeId) {
+    for (const c of connected) for (const t of c.dirs) if (Math.abs(wrapPi(best.target - t)) < 0.02) edgeId = c.edgeId;
+  }
+  return {
+    x: sx + Math.cos(best.target) * len,
+    y: sy + Math.sin(best.target) * len,
+    right: edgeId ? { nodeId: start.nodeId, edgeId } : null,
+  };
+}
+export function rightAtJoin(doc, from, to, tol = ANGLE_TOL) {
+  const hits = [];
+  const check = (nodeId, ox, oy) => {
+    if (!nodeId) return;
+    const n = nodeById(doc, nodeId);
+    if (!n) return;
+    const dir = Math.atan2(oy - n.y, ox - n.x);
+    for (const e of doc.edges) {
+      if (e.a !== nodeId && e.b !== nodeId) continue;
+      const o = nodeById(doc, e.a === nodeId ? e.b : e.a);
+      if (!o) continue;
+      const along = Math.atan2(o.y - n.y, o.x - n.x);
+      const abs = Math.abs(wrapPi(dir - along));
+      if (Math.abs(abs - Math.PI / 2) <= tol) hits.push({ nodeId, edgeId: e.id });
+    }
+  };
+  check(from?.nodeId, to.x, to.y);
+  check(to?.nodeId, from.x, from.y);
+  return hits;
+}
+export function moveNode(doc, id, x, y) {
+  const d = clone(doc);
+  const n = nodeById(d, id);
+  if (n) { n.x = Math.max(0, Math.min(1, x)); n.y = Math.max(0, Math.min(1, y)); }
+  return d;
+}
+export function moveEdge(doc, edgeId, dx, dy) {
+  const d = clone(doc);
+  const e = edgeById(d, edgeId);
+  if (!e) return d;
+  for (const id of [e.a, e.b]) {
+    const n = nodeById(d, id);
+    if (n) { n.x = Math.max(0, Math.min(1, n.x + dx)); n.y = Math.max(0, Math.min(1, n.y + dy)); }
+  }
+  return d;
+}
+export function setFaceOffset(doc, sig, dx, dy) {
+  const d = clone(doc);
+  d.faceOffsets = d.faceOffsets || [];
+  const row = { sig, dx, dy };
+  const i = d.faceOffsets.findIndex((f) => f.sig === sig);
+  if (i >= 0) d.faceOffsets[i] = row; else d.faceOffsets.push(row);
+  return d;
+}
+function segDist(px, py, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy || 1;
+  let t = ((px - a.x) * dx + (py - a.y) * dy) / l2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (a.x + t * dx), py - (a.y + t * dy));
+}
+export function pointInPoly(nodes, x, y) { return pointIn(nodes, x, y); }
+export function polylabel(points) {
+  if (!points?.length) return { x: 0.5, y: 0.5 };
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) { minX = Math.min(minX, p.x); minY = Math.min(minY, p.y); maxX = Math.max(maxX, p.x); maxY = Math.max(maxY, p.y); }
+  const dist = (x, y) => {
+    let m = Infinity;
+    for (let i = 0; i < points.length; i++) m = Math.min(m, segDist(x, y, points[i], points[(i + 1) % points.length]));
+    return pointIn(points, x, y) ? m : -m;
+  };
+  let best = { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+  let bestD = dist(best.x, best.y);
+  const w = Math.max(1e-6, maxX - minX), h = Math.max(1e-6, maxY - minY);
+  const n = 24;
+  for (let iy = 0; iy < n; iy++) for (let ix = 0; ix < n; ix++) {
+    const x = minX + (ix + 0.5) / n * w, y = minY + (iy + 0.5) / n * h;
+    const d = dist(x, y);
+    if (d > bestD) { bestD = d; best = { x, y }; }
+  }
+  let step = Math.max(w, h) / n;
+  for (let k = 0; k < 4; k++) {
+    step /= 2;
+    const x0 = best.x, y0 = best.y;
+    for (let iy = -3; iy <= 3; iy++) for (let ix = -3; ix <= 3; ix++) {
+      const x = x0 + ix * step, y = y0 + iy * step;
+      const d = dist(x, y);
+      if (d > bestD) { bestD = d; best = { x, y }; }
+    }
+  }
+  return best;
+}
+function cycleCrosses(doc, ids) {
+  const edges = cycleEdges(doc, ids);
+  if (!edges) return false;
+  for (let i = 0; i < edges.length; i++) for (let j = i + 1; j < edges.length; j++) {
+    if (j === i + 1 || (i === 0 && j === edges.length - 1)) continue;
+    const a = nodeById(doc, edges[i].a), b = nodeById(doc, edges[i].b);
+    const c = nodeById(doc, edges[j].a), d = nodeById(doc, edges[j].b);
+    if (a && b && c && d && segIntersect(a, b, c, d)) return true;
+  }
+  return false;
+}
+export function evaluateFaces(doc) {
+  const out = [];
+  for (const cyc of findCycles(doc)) {
+    const edges = cycleEdges(doc, cyc.nodes);
+    if (!edges || cycleCrosses(doc, cyc.nodes)) continue;
+    const poly = cyc.nodes.map((id) => nodeById(doc, id)).filter(Boolean);
+    if (poly.length < 3) continue;
+    const pole = polylabel(poly);
+    const off = (doc.faceOffsets || []).find((f) => f.sig === cyc.sig) || { dx: 0, dy: 0 };
+    let x = pole.x + (off.dx || 0), y = pole.y + (off.dy || 0);
+    if (!pointIn(poly, x, y)) { x = pole.x; y = pole.y; }
+    const free = edges.some((e) => e.free);
+    const ev = free ? fail(['Freie Linie – keine Berechnung']) : evaluateCycle(doc, cyc.nodes);
+    let text = 'Maße fehlen';
+    if (free) text = 'Freie Linie – keine Berechnung';
+    else if (ev.contradictions?.length) text = 'Widerspruch';
+    else if (ev.ok) text = `${fmtNum(ev.area)} m²`;
+    out.push({ sig: cyc.sig, nodes: cyc.nodes, x, y, text, ev, free, ok: !!ev.ok && !free });
+  }
+  return out;
+}
+export function sketchProposals(doc) {
+  const labels = (doc.edges || []).map((e) => e.label);
+  const dup = new Set(labels.filter((l, i) => l && labels.indexOf(l) !== i));
+  const sides = (doc.edges || []).map((e) => {
+    const missing = !e.measure || e.measure.source === 'derived' || !isFinite(+e.measure.value);
+    const ambiguous = dup.has(e.label);
+    return {
+      kind: 'side', id: e.id, bez: `Seite ${String(e.label || '?').toUpperCase()}`,
+      value: missing ? null : +e.measure.value, unit: missing ? null : (e.measure.unit || 'm'),
+      missing, ambiguous, free: !!e.free, take: !missing && !ambiguous,
+    };
+  });
+  const areas = evaluateFaces(doc).map((f, i) => ({
+    kind: 'area', sig: f.sig, bez: `Fläche ${f.ev.parts?.[0]?.label || ('F' + (i + 1))}`,
+    value: f.ok ? Math.round(f.ev.area * 100) / 100 : null,
+    unit: 'm²', missing: !f.ok, free: !!f.free, take: !!f.ok,
+    hint: f.ok ? '' : (f.ev.steps || []).slice(0, 4).join(' · '),
+    steps: f.ev.steps || [], parts: f.ev.parts || [],
+  }));
+  return { sides, areas };
 }
