@@ -1,7 +1,7 @@
 // Service Worker: App-Shell offline verfügbar (Cache-first), Daten liegen in IndexedDB.
 // Alle URLs werden relativ zum Skript aufgelöst, damit die App unter einem Unterpfad
 // (z. B. https://rajko89.github.io/baudoku/) funktioniert.
-const VERSION = 'baudoku-v1.6.0';
+const VERSION = 'baudoku-v1.6.1';
 const ASSET_PATHS = [
   './',
   './index.html',
@@ -18,7 +18,6 @@ const ASSET_PATHS = [
   './js/backup.js',
   './js/sketch.js',
   './js/sketch-calc.js',
-  './js/detect.js',
   './js/draw.js',
   './js/plan.js',
   './vendor/jspdf.umd.min.js',

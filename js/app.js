@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.6.0';
+const APP_VERSION = 'baudoku-v1.6.1';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true };
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
@@ -220,7 +220,8 @@ async function viewProject(pid, tab, q) {
   sheets.sort((a, b) => (b.updated || 0) - (a.updated || 0));
   photos.sort((a, b) => a.time - b.time || a.created - b.created); notes.sort((a, b) => b.created - a.created); am.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const no = new Map(photos.map((x, i) => [x.id, i + 1]));
-  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['sketches', '✏️', 'Skizze', sketches.length], ['export', '📄', 'Export', '']];
+  const drawnPhotos = photos.filter((p) => p.markup?.doc || (p.markup?.strokes || []).length).length;
+  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['sketches', '✏️', 'Skizze', drawnPhotos + sheets.length + sketches.length], ['export', '📄', 'Export', '']];
   APP.innerHTML = header(p.name, { back: '#/', sub: [p.kunde, p.adresse].filter(Boolean).join(' · ') || (p.bvnr ? 'BV ' + p.bvnr : ''), right: `<button class="ib" data-nav="#/p/${pid}/edit" aria-label="Bearbeiten">✎</button>` }) +
     `<main id="tab"></main><nav class="tabs">${tabs.map(([k, i, l, c]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}${c !== '' ? ` (${c})` : ''}</button>`).join('')}</nav>`;
   $$('.tabs button').forEach(b => b.onclick = () => history.replaceState(null, '', `#/p/${pid}?tab=${b.dataset.tab}`) || route());
@@ -471,7 +472,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.6 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.6.1 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');

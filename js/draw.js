@@ -2,7 +2,7 @@
 import * as db from './db.js';
 import { parseNum } from './util.js';
 import {
-  emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, toggleRight,
+  emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, toggleRight, setParallel,
   snapTarget, cycleAt, evaluateCycle, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
 } from './plan.js';
