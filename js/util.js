@@ -80,9 +80,18 @@ export const confirmDlg = (title, text, okLabel = 'Löschen', cls = 'danger') =>
 
 export function blobUrl(blob) { return blob ? URL.createObjectURL(blob) : ''; }
 export async function loadImg(blob) {
-  const url = URL.createObjectURL(blob); const img = new Image(); img.decoding = 'async'; img.src = url;
-  try { await img.decode(); } catch (e) { await new Promise((r, j) => { img.onload = r; img.onerror = j; }); }
-  img._url = url; return img;
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.decoding = 'async';
+  await new Promise((res, rej) => {
+    const ok = () => (img.naturalWidth ? res() : rej(new Error('Bild konnte nicht gelesen werden')));
+    img.onload = ok;
+    img.onerror = () => rej(new Error('Bild konnte nicht gelesen werden'));
+    img.src = url;
+    if (img.complete) ok();
+  });
+  img._url = url;
+  return img;
 }
 export function canvasToBlob(c, type = 'image/jpeg', q = 0.88) { return new Promise(r => c.toBlob(r, type, q)); }
 export function downloadBlob(blob, name) {
