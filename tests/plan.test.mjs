@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -128,6 +128,72 @@ test('alte Striche und Kommaformat', () => {
   const doc = importLegacyStrokes([{ tool: 'line', points: [[0.1, 0.1], [0.4, 0.1]] }, { tool: 'pen', points: [[0, 0], [0.2, 0.2], [0.1, 0.3]] }]);
   assert.equal(doc.edges.length, 1);
   assert.equal(doc.strokes.length, 1);
+});
+
+test('Winkelfang setzt einen rechten Winkel, knapp daneben nicht', () => {
+  let d = emptyDoc();
+  d = line(d, 0, 0, 1, 0);
+  const start = d.nodes.find((n) => n.x === 1);
+  const ang = Math.PI / 2 + 5 * Math.PI / 180;
+  const raw = { x: 1 + Math.cos(ang) * 0.4, y: Math.sin(ang) * 0.4 };
+  const snap = angleSnap(d, { x: 1, y: 0, nodeId: start.id }, raw.x, raw.y);
+  assert.ok(snap);
+  assert.ok(Math.abs(snap.x - 1) < 0.01, snap.x);
+  assert.equal(snap.right.edgeId, edge(d, 'a').id);
+  d = addLine(d, { x: 1, y: 0, nodeId: start.id }, { x: snap.x, y: snap.y }, { rights: [snap.right] });
+  assert.equal(d.rights.length, 1);
+  const far = Math.PI / 2 + 20 * Math.PI / 180;
+  assert.equal(angleSnap(d, { x: 1, y: 0, nodeId: start.id }, 1 + Math.cos(far) * 0.4, Math.sin(far) * 0.4), null);
+});
+
+test('Freie Linie bleibt ohne rechten Winkel und ohne Fläche', () => {
+  let d = emptyDoc();
+  const pts = [[0, 0], [1, 0], [1, 1], [0, 1]];
+  for (let i = 0; i < 4; i++) d = addLine(d, { x: pts[i][0], y: pts[i][1] }, { x: pts[(i + 1) % 4][0], y: pts[(i + 1) % 4][1] }, { free: true });
+  assert.equal(d.rights.length, 0);
+  assert.ok(d.edges.every((e) => e.free));
+  d = setMeasure(d, edge(d, 'a').id, 8, 'm');
+  d = setMeasure(d, edge(d, 'b').id, 4, 'm');
+  const faces = evaluateFaces(d);
+  assert.equal(faces.length, 1);
+  assert.equal(faces[0].ok, false);
+  assert.match(faces[0].text, /Freie Linie/);
+});
+
+test('Zentimeter werden zu Quadratmetern, Label liegt in der L-Form', () => {
+  let d = rect();
+  for (const n of d.nodes) d = toggleRight(d, n.id).doc;
+  d = setMeasure(d, edge(d, 'a').id, 850, 'cm');
+  d = setMeasure(d, edge(d, 'b').id, 420, 'cm');
+  const ev = evaluateCycle(d, idsOf(d));
+  assert.equal(ev.ok, true);
+  assert.ok(Math.abs(ev.area - 35.7) < 0.02, ev.area);
+  const L = [[0, 0], [0.8, 0], [0.8, 0.3], [0.5, 0.3], [0.5, 0.5], [0, 0.5]];
+  const pole = polylabel(L.map(([x, y]) => ({ x, y })));
+  assert.equal(pointInPoly(L.map(([x, y]) => ({ x, y })), pole.x, pole.y), true);
+  assert.ok(pole.x < 0.5 && pole.y < 0.3, JSON.stringify(pole));
+});
+
+test('zwei Flächen und fehlendes Maß in den Vorschlägen', () => {
+  let d = rect();
+  for (const n of d.nodes) d = toggleRight(d, n.id).doc;
+  d = setMeasure(d, edge(d, 'a').id, 2, 'm');
+  d = setMeasure(d, edge(d, 'b').id, 3, 'm');
+  d = addLine(d, { x: 1.2, y: 0 }, { x: 2, y: 0 });
+  d = addLine(d, { x: 2, y: 0 }, { x: 2, y: 1 });
+  d = addLine(d, { x: 2, y: 1 }, { x: 1.2, y: 1 });
+  d = addLine(d, { x: 1.2, y: 1 }, { x: 1.2, y: 0 });
+  const faces = evaluateFaces(d);
+  assert.equal(faces.length, 2);
+  assert.ok(faces.some((f) => f.ok && Math.abs(f.ev.area - 6) < 0.05));
+  assert.ok(faces.some((f) => !f.ok && /Maße fehlen|fehlt/.test(f.text + f.ev.steps.join(' '))));
+  const prop = sketchProposals(d);
+  assert.ok(prop.sides.some((s) => s.bez === 'Seite A' && s.take && s.value === 2));
+  assert.ok(prop.sides.some((s) => s.missing && !s.take));
+  assert.equal(prop.areas.filter((a) => a.take).length, 1);
+  const moved = moveEdge(d, edge(d, 'a').id, 0, 0.05);
+  const a = moved.edges.find((e) => e.label === 'a');
+  assert.ok(Math.abs(nodeById(moved, a.a).y - 0.05) < 1e-6);
 });
 
 test('Trapez nur mit festgelegter Parallelität', () => {
