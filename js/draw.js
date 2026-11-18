@@ -3,8 +3,8 @@ import * as db from './db.js';
 import { parseNum } from './util.js';
 import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, toggleRight,
-  snapTarget, cycleAt, evaluateCycle, findCycles, importLegacyStrokes, importLegacySketch, legacyStrokes,
-  nodeById, edgeById, fmtNum,
+  snapTarget, cycleAt, evaluateCycle, importLegacyStrokes, importLegacySketch, legacyStrokes,
+  nodeById, edgeById, fmtNum, evaluateFaces, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
 } from './plan.js';
 
 const INK = '#e8590c';
@@ -50,14 +50,16 @@ function readable(ang) {
 }
 function paintDoc(ctx, doc, w, h, selected) {
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-  drawStrokes(ctx, (doc.strokes || []).map((s) => ({ points: s.points, width: 0.012 })), w, h);
+  drawStrokes(ctx, (doc.strokes || []).map((s) => ({ points: s.points, width: s.width || 0.012, color: s.color })), w, h);
   for (const e of doc.edges || []) {
     const a = nodeById(doc, e.a), b = nodeById(doc, e.b);
     if (!a || !b) continue;
     ctx.beginPath(); ctx.moveTo(a.x * w, a.y * h); ctx.lineTo(b.x * w, b.y * h);
-    ctx.strokeStyle = selected === e.id ? '#0b7285' : '#1f2933';
+    ctx.strokeStyle = e.free ? '#7048e8' : (selected === e.id ? '#0b7285' : '#1f2933');
     ctx.lineWidth = selected === e.id ? Math.max(7, w / 80) : Math.max(4, w / 140);
+    ctx.setLineDash(e.free ? [10, 7] : []);
     ctx.stroke();
+    ctx.setLineDash([]);
     const mx = (a.x + b.x) / 2 * w, my = (a.y + b.y) / 2 * h;
     const ang = readable(Math.atan2((b.y - a.y) * h, (b.x - a.x) * w));
     ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
@@ -89,6 +91,15 @@ function paintDoc(ctx, doc, w, h, selected) {
     ctx.fillRect(t.x * w - 6, t.y * h - 18, tw, 24);
     ctx.fillStyle = '#111'; ctx.textAlign = 'left'; ctx.fillText(t.text || '', t.x * w, t.y * h);
   }
+  for (const f of evaluateFaces(doc)) {
+    ctx.font = `700 ${Math.max(15, w / 38)}px sans-serif`;
+    ctx.textAlign = 'center';
+    const tw = ctx.measureText(f.text).width + 16;
+    ctx.fillStyle = 'rgba(255,255,255,.94)';
+    ctx.fillRect(f.x * w - tw / 2, f.y * h - 16, tw, 28);
+    ctx.fillStyle = f.ok ? '#0b7285' : '#c92a2a';
+    ctx.fillText(f.text, f.x * w, f.y * h + 5);
+  }
 }
 
 function docFrom(photo, sheet, sketch) {
@@ -106,7 +117,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   img = img || blankCanvas(sheet?.width || 1000, sheet?.height || 1400);
   let doc = docFrom(photo, sheet, sketch);
   let hidePhoto = blank || !!photo?.markup?.hidePhoto;
-  let tool = 'pen';
+  let tool = 'line';
+  let pen = doc.pen || { width: 0.012, color: '#111111' };
   let undo = [];
   let active = null;
   let selectedEdge = null;
@@ -117,7 +129,6 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let msg = '';
   let formGen = 0;
   let view = { s: 1, ox: 0, oy: 0, iw: 1, ih: 1 };
-  const projectId = photo?.projectId || sheet?.projectId || sketch?.projectId;
   const title = sheet?.title || sketch?.title || 'Zeichnen';
   const el = document.createElement('div');
   el.className = 'draw';
@@ -131,9 +142,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="drawDel" class="btn danger">Löschen</button>
     </form>
     <div id="drawCtx"></div>
+    <div id="penBar">
+      <button type="button" data-w="0.006">klein</button>
+      <button type="button" data-w="0.012">mittel</button>
+      <button type="button" data-w="0.022">groß</button>
+      <button type="button" data-c="#111111" class="swatch">schwarz</button>
+      <button type="button" data-c="#e03131" class="swatch">rot</button>
+      <button type="button" data-c="#2b8a3e" class="swatch">grün</button>
+      <button type="button" data-c="#1c7ed6" class="swatch">blau</button>
+    </div>
     <div class="draw-tools">
-      <button type="button" id="draw-pen" class="on"><span>✎</span>Stift</button>
-      <button type="button" id="draw-line"><span>／</span>Linie</button>
+      <button type="button" id="draw-pen"><span>✎</span>Stift</button>
+      <button type="button" id="draw-line" class="on"><span>／</span>Linie</button>
+      <button type="button" id="draw-free"><span>∿</span>Freie Linie</button>
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
@@ -194,12 +215,24 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     ctx.save();
     ctx.translate(view.ox, view.oy); ctx.scale(view.iw * view.s, view.ih * view.s);
     ctx.restore();
-    const shown = active?.tool === 'pen' && active.points?.length ? { ...doc, strokes: doc.strokes.concat([{ id: 'tmp', points: active.points }]) } : doc;
-    const preview = active?.tool === 'line' && active.end ? addLine(shown, active.start, active.end) : shown;
+    let preview = doc;
+    if (active?.tool === 'pen' && active.points?.length) preview = { ...doc, strokes: doc.strokes.concat([{ id: 'tmp', points: active.points, width: pen.width, color: pen.color }]) };
+    else if ((active?.tool === 'line' || active?.tool === 'free') && active.end) preview = addLine(doc, active.start, active.end, { free: active.tool === 'free' });
+    else if (active?.tool === 'moveedge' && active.moved) preview = moveEdge(doc, active.id, active.dx, active.dy);
+    else if (active?.tool === 'movenode' && active.moved) preview = moveNode(doc, active.id, active.nx, active.ny);
+    else if (active?.tool === 'face' && active.moved) {
+      const base = (doc.faceOffsets || []).find((f) => f.sig === active.sig) || { dx: 0, dy: 0 };
+      preview = setFaceOffset(doc, active.sig, (base.dx || 0) + active.dx, (base.dy || 0) + active.dy);
+    }
+    else if (active?.tool === 'text' && active.moved) preview = doc;
     paintFitted(ctx, preview, selectedEdge);
     el.querySelector('#draw-undo').disabled = !undo.length;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
-    ['pen', 'line', 'text', 'measure', 'area'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    ['pen', 'line', 'free', 'text', 'measure', 'area'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    const bar = el.querySelector('#penBar');
+    bar.classList.toggle('on', tool === 'pen');
+    bar.querySelectorAll('[data-w]').forEach((b) => b.classList.toggle('on', Math.abs(+b.dataset.w - pen.width) < 1e-6));
+    bar.querySelectorAll('[data-c]').forEach((b) => b.classList.toggle('on', b.dataset.c === pen.color));
     el.querySelector('#drawMsg').textContent = msg;
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
@@ -219,14 +252,16 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   function paintFitted(ctx2, d, sel) {
     const X = (nx) => view.ox + nx * view.iw * view.s;
     const Y = (ny) => view.oy + ny * view.ih * view.s;
-    drawStrokes(ctx2, (d.strokes || []).map((s) => ({ points: s.points.map((p) => [X(p[0]) / canvas.width, Y(p[1]) / canvas.height]), width: 0.012 })), canvas.width, canvas.height);
+    drawStrokes(ctx2, (d.strokes || []).map((s) => ({ points: s.points.map((p) => [X(p[0]) / canvas.width, Y(p[1]) / canvas.height]), width: s.width || 0.012, color: s.color })), canvas.width, canvas.height);
     for (const e of d.edges || []) {
       const a = nodeById(d, e.a), b = nodeById(d, e.b);
       if (!a || !b) continue;
       ctx2.beginPath(); ctx2.moveTo(X(a.x), Y(a.y)); ctx2.lineTo(X(b.x), Y(b.y));
-      ctx2.strokeStyle = sel === e.id ? '#0b7285' : '#1f2933';
+      ctx2.strokeStyle = e.free ? '#7048e8' : (sel === e.id ? '#0b7285' : '#1f2933');
       ctx2.lineWidth = sel === e.id ? 8 : 4;
+      ctx2.setLineDash(e.free ? [8, 6] : []);
       ctx2.stroke();
+      ctx2.setLineDash([]);
       const mx = (X(a.x) + X(b.x)) / 2, my = (Y(a.y) + Y(b.y)) / 2;
       const ang = readable(Math.atan2(Y(b.y) - Y(a.y), X(b.x) - X(a.x)));
       ctx2.save(); ctx2.translate(mx, my); ctx2.rotate(ang);
@@ -254,6 +289,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.fillStyle = 'rgba(255,255,255,.94)'; ctx2.fillRect(X(t.x) - 6, Y(t.y) - 20, tw, 26);
       ctx2.fillStyle = '#111'; ctx2.textAlign = 'left'; ctx2.fillText(t.text || '', X(t.x), Y(t.y));
     }
+    ctx2.textAlign = 'center';
+    for (const f of evaluateFaces(d)) {
+      ctx2.font = '700 16px sans-serif';
+      const tw = ctx2.measureText(f.text).width + 16;
+      ctx2.fillStyle = 'rgba(255,255,255,.94)';
+      ctx2.fillRect(X(f.x) - tw / 2, Y(f.y) - 16, tw, 28);
+      ctx2.fillStyle = f.ok ? '#0b7285' : '#c92a2a';
+      ctx2.fillText(f.text, X(f.x), Y(f.y) + 5);
+    }
+    if (active?.tool === 'line' && active.angled?.right && active.start) {
+      ctx2.fillStyle = '#2b8a3e'; ctx2.font = '700 16px sans-serif'; ctx2.textAlign = 'left';
+      ctx2.fillText('∟', X(active.start.x) + 8, Y(active.start.y) - 8);
+    }
   }
   function hitEdge(p) {
     let best = null, bd = radiusNorm();
@@ -277,9 +325,22 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     return best;
   }
   function hitText(p) {
-    let best = null, bd = radiusNorm();
+    let best = null, bd = radiusNorm() * 1.6;
     for (const t of doc.texts || []) { const d = Math.hypot(t.x - p[0], t.y - p[1]); if (d < bd) { bd = d; best = t; } }
     return best;
+  }
+  function hitFace(p) {
+    let best = null, bd = radiusNorm() * 1.8;
+    for (const f of evaluateFaces(doc)) { const d = Math.hypot(f.x - p[0], f.y - p[1]); if (d < bd) { bd = d; best = f; } }
+    return best;
+  }
+  function hitAngle(p) {
+    const dn = 14 / ((view.iw * view.s) || 1);
+    for (const n of doc.nodes) {
+      if (!(doc.rights || []).some((r) => r.node === n.id)) continue;
+      if (Math.hypot(p[0] - (n.x + dn), p[1] - (n.y - dn)) < dn * 1.2) return n;
+    }
+    return null;
   }
   async function persist() {
     const strokes = legacyStrokes(doc);
@@ -326,20 +387,44 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (selectedText) { await commit(deleteText(doc, selectedText)); selectedText = null; form.hidden = true; }
   };
 
+  function placeEnd(start, x, y, free) {
+    const snap = snapTarget(doc, x, y, radiusNorm());
+    if (snap) return { end: snap, angled: null, mark: snap };
+    if (free) return { end: { x, y }, angled: null, mark: null };
+    const angled = angleSnap(doc, start, x, y);
+    if (angled) return { end: { x: angled.x, y: angled.y }, angled, mark: { x: angled.x, y: angled.y, kind: 'angle' } };
+    return { end: { x, y }, angled: null, mark: null };
+  }
   canvas.addEventListener('pointerdown', (ev) => {
     if (ev.button != null && ev.button !== 0) return;
     ev.preventDefault();
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* Test-Events */ }
     const p = norm(ev);
+    const t = hitText(p);
+    if (t) {
+      selectedText = t.id;
+      active = { tool: 'text', id: t.id, x: p[0], y: p[1], moved: false, origin: clone(doc) };
+      return;
+    }
+    const face = hitFace(p);
+    if (face) {
+      active = { tool: 'face', sig: face.sig, x: p[0], y: p[1], dx: 0, dy: 0, moved: false, pole: { x: face.x, y: face.y } };
+      const evu = face.ev;
+      ann = evu.edgeNotes || [];
+      msg = (evu.steps || [face.text]).join('\n');
+      paint();
+      return;
+    }
+    const glyph = hitAngle(p);
+    if (glyph) { active = { tool: 'angle', nodeId: glyph.id }; return; }
     if (tool === 'pen') active = { tool: 'pen', points: [p] };
-    else if (tool === 'line') {
+    else if (tool === 'line' || tool === 'free') {
       const snap = snapTarget(doc, p[0], p[1], radiusNorm());
-      active = { tool: 'line', start: snap || { x: p[0], y: p[1] }, end: snap || { x: p[0], y: p[1] } };
+      const start = snap || { x: p[0], y: p[1] };
+      active = { tool, start, end: start, angled: null };
       showSnap(snap);
     } else if (tool === 'text') {
-      const t = hitText(p);
-      if (t) { selectedText = t.id; active = { tool: 'text', id: t.id, x: p[0], y: p[1], moved: false, origin: clone(doc) }; openForm('text-edit', t.text); }
-      else { selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', ''); }
+      selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
     } else if (tool === 'measure') {
       const e = hitEdge(p);
       if (arm && e && e.id !== arm) {
@@ -354,18 +439,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       paint();
     } else if (tool === 'area') {
       const n = hitNode(p);
-      selectedNode = n ? n.id : null;
-      if (!n) {
+      const e = n ? null : hitEdge(p);
+      if (n) { selectedNode = n.id; active = { tool: 'movenode', id: n.id, x: p[0], y: p[1], nx: n.x, ny: n.y, moved: false }; }
+      else if (e) { selectedEdge = e.id; active = { tool: 'moveedge', id: e.id, x: p[0], y: p[1], dx: 0, dy: 0, moved: false }; }
+      else {
         const cyc = cycleAt(doc, p[0], p[1]);
         if (!cyc) msg = 'Keine geschlossene Fläche an dieser Stelle.';
         else {
-          const ev = evaluateCycle(doc, cyc.nodes);
-          ann = ev.edgeNotes || [];
-          msg = ev.steps.join('\n');
-          if (ev.ok) syncFaces(cyc, ev);
+          const evu = evaluateCycle(doc, cyc.nodes);
+          ann = evu.edgeNotes || [];
+          msg = evu.steps.join('\n');
         }
+        paint();
       }
-      paint();
     }
   });
   canvas.addEventListener('pointermove', (ev) => {
@@ -375,28 +461,56 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const last = active.points[active.points.length - 1];
       if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) active.points.push(p);
       paint();
-    } else if (active.tool === 'line') {
-      const snap = snapTarget(doc, p[0], p[1], radiusNorm());
-      active.end = snap || { x: p[0], y: p[1] };
-      showSnap(snap);
+    } else if (active.tool === 'line' || active.tool === 'free') {
+      const placed = placeEnd(active.start, p[0], p[1], active.tool === 'free');
+      active.end = placed.end;
+      active.angled = placed.angled;
+      showSnap(placed.mark);
       paint();
     } else if (active.tool === 'text') {
-      if (Math.hypot(p[0] - active.x, p[1] - active.y) > 0.01) {
+      if (Math.hypot(p[0] - active.x, p[1] - active.y) > 0.012) {
         if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
         active.moved = true;
       }
       if (active.moved) { doc = moveText(doc, active.id, p[0], p[1]); paint(); }
+    } else if (active.tool === 'face') {
+      const dx = p[0] - active.x, dy = p[1] - active.y;
+      if (Math.hypot(dx, dy) > 0.012) active.moved = true;
+      if (active.moved) { active.dx = dx; active.dy = dy; paint(); }
+    } else if (active.tool === 'movenode') {
+      if (Math.hypot(p[0] - active.x, p[1] - active.y) > 0.012) active.moved = true;
+      if (active.moved) { active.nx = p[0]; active.ny = p[1]; paint(); }
+    } else if (active.tool === 'moveedge') {
+      const dx = p[0] - active.x, dy = p[1] - active.y;
+      if (Math.hypot(dx, dy) > 0.012) active.moved = true;
+      if (active.moved) { active.dx = dx; active.dy = dy; paint(); }
     }
   });
   const end = async () => {
     if (!active) return;
     const act = active; active = null; showSnap(null);
-    if (act.tool === 'pen' && act.points.length >= 2) await commit(addStroke(doc, act.points));
-    else if (act.tool === 'line') {
-      const next = addLine(doc, act.start, act.end);
-      if (next.edges.length !== doc.edges.length || next.nodes.length !== doc.nodes.length) await commit(next);
-      else paint();
+    if (act.tool === 'pen' && act.points.length >= 2) { doc.pen = pen; await commit(addStroke(doc, act.points, pen)); }
+    else if (act.tool === 'line' || act.tool === 'free') {
+      const rights = act.tool === 'line' ? rightAtJoin(doc, act.start, act.end) : [];
+      if (act.angled?.right) rights.push(act.angled.right);
+      const next = addLine(doc, act.start, act.end, { free: act.tool === 'free', rights });
+      if (next.edges.length !== doc.edges.length || next.nodes.length !== doc.nodes.length || next.rights.length !== doc.rights.length) {
+        await commit(next);
+        await refreshArea();
+      } else paint();
     } else if (act.tool === 'text' && act.moved) await persist();
+    else if (act.tool === 'text' && !act.moved) {
+      const t = (doc.texts || []).find((x) => x.id === act.id);
+      if (t) openForm('text-edit', t.text);
+    } else if (act.tool === 'face' && act.moved) {
+      const base = (doc.faceOffsets || []).find((f) => f.sig === act.sig) || { dx: 0, dy: 0 };
+      await commit(setFaceOffset(doc, act.sig, (base.dx || 0) + act.dx, (base.dy || 0) + act.dy));
+    } else if (act.tool === 'face') paint();
+    else if (act.tool === 'angle') {
+      const res = toggleRight(doc, act.nodeId);
+      if (!res.error) { await commit(res.doc); await refreshArea(); }
+    } else if (act.tool === 'movenode' && act.moved) { await commit(moveNode(doc, act.id, act.nx, act.ny)); await refreshArea(); }
+    else if (act.tool === 'moveedge' && act.moved) { await commit(moveEdge(doc, act.id, act.dx, act.dy)); await refreshArea(); }
     else paint();
   };
   canvas.addEventListener('pointerup', end);
@@ -404,7 +518,16 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
 
   el.querySelector('#draw-pen').onclick = () => { tool = 'pen'; paint(); };
   el.querySelector('#draw-line').onclick = () => { tool = 'line'; paint(); };
+  el.querySelector('#draw-free').onclick = () => { tool = 'free'; paint(); };
   el.querySelector('#draw-text').onclick = () => { tool = 'text'; paint(); };
+  el.querySelector('#penBar').addEventListener('click', (ev) => {
+    const b = ev.target.closest('button'); if (!b) return;
+    if (b.dataset.w) pen = { ...pen, width: +b.dataset.w };
+    if (b.dataset.c) pen = { ...pen, color: b.dataset.c };
+    doc.pen = pen;
+    persist();
+    paint();
+  });
   el.querySelector('#draw-measure').onclick = () => { tool = 'measure'; paint(); };
   el.querySelector('#draw-area').onclick = () => { tool = 'area'; paint(); };
   el.querySelector('#draw-undo').onclick = async () => {
@@ -422,31 +545,12 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   async function refreshArea() {
     ann = [];
     const lines = [];
-    for (const cyc of findCycles(doc)) {
-      const ev = evaluateCycle(doc, cyc.nodes);
-      lines.push(...(ev.steps || []));
-      for (const n of ev.edgeNotes || []) ann.push(n);
-      if (ev.ok) await syncFaces(cyc, ev);
+    for (const f of evaluateFaces(doc)) {
+      lines.push(...(f.ev.steps || []));
+      for (const n of f.ev.edgeNotes || []) ann.push(n);
     }
     msg = lines.join('\n');
     paint();
-  }
-  async function syncFaces(cyc, ev) {
-    if (!projectId || !ev?.ok) return;
-    const key = [...cyc.nodes].sort().join(',');
-    const rows = await db.byProject('aufmass', projectId);
-    let row = rows.find((r) => r.drawKey === key);
-    if (row?.manual) return;
-    const menge = Math.round(ev.area * 100) / 100;
-    if (!row) {
-      const n = rows.reduce((m, r) => Math.max(m, parseInt(r.pos, 10) || 0), 0) + 1;
-      row = { id: 'face-' + Date.now(), projectId, order: Date.now(), pos: String(n).padStart(2, '0'), einheit: 'm²', manual: false, drawKey: key };
-    }
-    row.bez = 'Fläche ' + (ev.parts?.[0]?.label || 'F1');
-    row.menge = menge;
-    row.expr = fmtNum(menge);
-    row.calc = { ok: true, result: menge, steps: ev.steps, parts: ev.parts, faceLabel: ev.parts?.map((p) => p.label).join(', '), shapeLabel: 'Skizze', areaKind: 'projection', areaKindLabel: 'aus Maßen', isDeduction: false, edges: [], formula: (ev.steps.find((s) => s.startsWith('Formel:')) || '').replace('Formel: ', ''), substitution: (ev.steps.at(-1) || '').replace('Rechnung: ', ''), missing: [] };
-    await db.put('aufmass', row);
   }
   let roLock = false;
   const ro = new ResizeObserver(() => {
@@ -464,13 +568,17 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     count: () => (doc.seq || []).filter((s) => s.type === 'stroke' || s.type === 'edge').length,
     strokes() {
       return (doc.seq || []).filter((s) => s.type === 'stroke' || s.type === 'edge').map((s) => {
-        if (s.type === 'stroke') return { tool: 'pen', n: (doc.strokes.find((x) => x.id === s.id)?.points.length) || 0 };
+        if (s.type === 'stroke') { const st = doc.strokes.find((x) => x.id === s.id); return { tool: 'pen', n: st?.points.length || 0, color: st?.color || '', width: st?.width || 0 }; }
         return { tool: 'line', n: 2 };
       });
     },
     edges: () => doc.edges.length,
+    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free }; }),
     nodes: () => doc.nodes.length,
     texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y })),
+    faces: () => evaluateFaces(doc).map((f) => ({ text: f.text, x: f.x, y: f.y, ok: f.ok, free: f.free })),
+    rights: () => (doc.rights || []).length,
+    pen: () => ({ ...pen }),
     clientPoint(nx, ny) {
       layout();
       const r = canvas.getBoundingClientRect();

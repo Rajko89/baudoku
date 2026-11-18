@@ -170,7 +170,7 @@ function edgeMeters(e) {
   return toMeters(e.measure.value, e.measure.unit || 'm');
 }
 function edgeNotes(edges, lens) {
-  return edges.map((e, i) => ({ id: e.id, text: `${fmtNum(lens[i])} m`, derived: edgeMeters(e) == null }));
+  return edges.map((e, i) => ({ id: e.id, text: `${fmtNum(lens[i])} m`, meters: lens[i], derived: edgeMeters(e) == null }));
 }
 function fail(missing, contradictions = []) {
   return { ok: false, missing, contradictions, area: null, steps: [...missing, ...contradictions], parts: [] };
@@ -480,7 +480,7 @@ export function legacyStrokes(doc) {
   return [...pens, ...lines];
 }
 
-export const ANGLE_TOL = 9 * Math.PI / 180;
+export const ANGLE_TOL = 10 * Math.PI / 180;
 
 function wrapPi(a) {
   while (a > Math.PI) a -= Math.PI * 2;
@@ -637,13 +637,22 @@ export function evaluateFaces(doc) {
 export function sketchProposals(doc) {
   const labels = (doc.edges || []).map((e) => e.label);
   const dup = new Set(labels.filter((l, i) => l && labels.indexOf(l) !== i));
+  const known = new Map();
+  for (const f of evaluateFaces(doc)) {
+    if (!f.ok) continue;
+    for (const n of f.ev.edgeNotes || []) if (n.meters != null) known.set(n.id, n);
+  }
   const sides = (doc.edges || []).map((e) => {
-    const missing = !e.measure || e.measure.source === 'derived' || !isFinite(+e.measure.value);
+    const entered = e.measure && e.measure.source !== 'derived' && isFinite(+e.measure.value);
+    const got = known.get(e.id);
     const ambiguous = dup.has(e.label);
+    const missing = !entered && !got;
     return {
       kind: 'side', id: e.id, bez: `Seite ${String(e.label || '?').toUpperCase()}`,
-      value: missing ? null : +e.measure.value, unit: missing ? null : (e.measure.unit || 'm'),
-      missing, ambiguous, free: !!e.free, take: !missing && !ambiguous,
+      value: entered ? +e.measure.value : (got ? Math.round(got.meters * 100) / 100 : null),
+      unit: entered ? (e.measure.unit || 'm') : (got ? 'm' : null),
+      missing, ambiguous, derived: !entered && !!got?.derived, free: !!e.free,
+      take: !missing && !ambiguous,
     };
   });
   const areas = evaluateFaces(doc).map((f, i) => ({

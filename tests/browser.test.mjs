@@ -251,6 +251,7 @@ try {
     for (const p of pts.slice(1)) await fire('pointermove', p);
     await fire('pointerup', pts[pts.length - 1]);
   };
+  await page.locator('#draw-pen').click();
   await stroke([await at(0.2, 0.3), await at(0.45, 0.35), await at(0.7, 0.55)]);
   await page.locator('#draw-line').click();
   await stroke([await at(0.15, 0.8), await at(0.85, 0.2)]);
@@ -312,6 +313,7 @@ try {
     for (const p of pts.slice(1)) await fire('pointermove', p);
     await fire('pointerup', pts[pts.length - 1]);
   };
+  await page.locator('#draw-pen').click();
   await sheetStroke([await sheetAt(0.2, 0.2), await sheetAt(0.5, 0.35), await sheetAt(0.8, 0.25)]);
   await page.locator('#draw-line').click();
   await sheetStroke([await sheetAt(0.2, 0.7), await sheetAt(0.8, 0.55)]);
@@ -430,16 +432,10 @@ try {
     const a = rect[i], b = rect[(i + 1) % rect.length];
     await gesture([await pt(a[0], a[1]), await pt(b[0], b[1])]);
   }
-  await page.waitForFunction(() => window.__baudoku.draw.nodes() === 4 && window.__baudoku.draw.edges() === 4);
-  await page.locator('#draw-area').click();
+  await page.waitForFunction(() => window.__baudoku.draw.nodes() === 4 && window.__baudoku.draw.edges() === 4 && window.__baudoku.draw.rights() === 4);
   await gesture([await pt(0.5, 0.45)]);
-  await waitMsg('Winkel bei Punkt');
+  await waitMsg('fehlt');
   await page.screenshot({ path: join(art, 'baudoku-fehlt.png') });
-  for (const p of rect) {
-    await page.locator('#draw-area').click();
-    await gesture([await pt(p[0], p[1])]);
-    await page.locator('#btn-right').click();
-  }
   async function measureAt(nx, ny, value, shot) {
     await page.locator('#draw-measure').click();
     await gesture([await pt(nx, ny)]);
@@ -482,13 +478,8 @@ try {
     await page.locator('#draw-line').click();
     await gesture([await pt(a[0], a[1]), await pt(b[0], b[1])]);
   }
-  const shape = await page.evaluate(() => ({ nodes: window.__baudoku.draw.nodes(), edges: window.__baudoku.draw.edges() }));
-  if (shape.nodes !== 6 || shape.edges !== 6) throw new Error('L-Form ' + JSON.stringify(shape));
-  for (const p of L) {
-    await page.locator('#draw-area').click();
-    await gesture([await pt(p[0], p[1])]);
-    await page.locator('#btn-right').click();
-  }
+  const shape = await page.evaluate(() => ({ nodes: window.__baudoku.draw.nodes(), edges: window.__baudoku.draw.edges(), rights: window.__baudoku.draw.rights() }));
+  if (shape.nodes !== 6 || shape.edges !== 6 || shape.rights < 6) throw new Error('L-Form ' + JSON.stringify(shape));
   const measures = [[0.46, 0.22, '8'], [0.78, 0.32, '3'], [0.63, 0.42, '3'], [0.48, 0.52, '2'], [0.31, 0.62, '5']];
   for (const [x, y, v] of measures) await measureAt(x, y, v);
   await waitMsg('34,00');

@@ -9,9 +9,10 @@ import { buildPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
 import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
+import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.5.0';
+const APP_VERSION = 'baudoku-v1.6.0';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true };
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
@@ -156,6 +157,63 @@ async function restamp(ph) {
 }
 
 /* ---------- Projektansicht mit Tabs ---------- */
+async function loadSketchDoc(kind, id) {
+  if (kind === 'sheet') { const s = await db.get('sheets', id); return s?.doc || importLegacyStrokes(s?.strokes || []); }
+  if (kind === 'sketch') { const s = await db.get('sketches', id); return s?.doc || importLegacySketch(s || {}, s?.imgW, s?.imgH); }
+  const p = await db.get('photos', id);
+  return p?.markup?.doc || importLegacyStrokes(p?.markup?.strokes || []);
+}
+async function sketchImport(pid, photos, reload) {
+  const box = $('#skImp'); if (!box) return;
+  const sheets = await db.byProject('sheets', pid);
+  const sketches = await db.byProject('sketches', pid);
+  const phs = photos.filter((p) => p.markup?.doc || p.markup?.strokes?.length);
+  const items = [
+    ...sheets.map((s) => ({ kind: 'sheet', id: s.id, title: s.title || 'Leeres Blatt' })),
+    ...sketches.map((s) => ({ kind: 'sketch', id: s.id, title: s.title || 'Flächenskizze' })),
+    ...phs.map((p) => ({ kind: 'photo', id: p.id, title: p.caption || 'Foto-Skizze' })),
+  ];
+  box.innerHTML = `<h3 class="sec">Skizze wählen</h3>${items.map((s) => `<button type="button" class="btn block sk-src" data-kind="${esc(s.kind)}" data-id="${esc(s.id)}">${esc(s.title)}</button>`).join('') || '<p class="small">Keine Skizze im Projekt.</p>'}`;
+  box.querySelectorAll('.sk-src').forEach((btn) => btn.onclick = async () => {
+    const doc = await loadSketchDoc(btn.dataset.kind, btn.dataset.id);
+    const prop = sketchProposals(doc);
+    const rows = [...prop.sides, ...prop.areas];
+    box.innerHTML = `<h3 class="sec">Vorschlag prüfen</h3><div id="skPrev">${rows.map((r, i) => `<label class="sk-row${r.missing || r.ambiguous || (r.free && r.kind === 'area') ? ' missing' : ''}" data-i="${i}">
+      <input type="checkbox" data-take ${r.take ? 'checked' : ''} ${r.take ? '' : 'disabled'}>
+      <span>${esc(r.bez)}</span>
+      <input data-val inputmode="decimal" value="${r.value == null ? '' : String(r.value).replace('.', ',')}" placeholder="${r.missing ? 'Maß fehlt' : ''}" aria-label="${esc(r.bez)}">
+      <b>${esc(r.unit || (r.kind === 'area' ? 'm²' : 'm'))}</b>
+      ${r.missing ? '<em>Maß fehlt</em>' : ''}${r.ambiguous ? '<em>nicht eindeutig</em>' : ''}${r.derived ? '<em>abgeleitet</em>' : ''}${r.free && r.kind === 'area' ? '<em>Freie Linie</em>' : ''}
+    </label>`).join('') || '<p>Nichts zu übernehmen.</p>'}</div><button type="button" class="btn primary block" id="skTake">Übernehmen</button>`;
+    box.querySelectorAll('[data-val]').forEach((inp) => inp.addEventListener('input', () => {
+      const row = inp.closest('.sk-row');
+      const cb = row.querySelector('[data-take]');
+      const note = row.querySelector('em')?.textContent || '';
+      if (/nicht eindeutig|Freie Linie/.test(note)) return;
+      const n = parseNum(inp.value);
+      if (inp.value.trim() && isFinite(n)) { cb.disabled = false; row.classList.remove('missing'); }
+    }));
+    $('#skTake').onclick = async () => {
+      const amNow = await db.byProject('aufmass', pid);
+      let n = amNow.reduce((m, r) => Math.max(m, parseInt(r.pos, 10) || 0), 0);
+      let added = 0;
+      for (const lab of box.querySelectorAll('.sk-row')) {
+        const cb = lab.querySelector('[data-take]');
+        if (!cb || !cb.checked || cb.disabled) continue;
+        const src = rows[+lab.dataset.i];
+        const raw = lab.querySelector('[data-val]').value.trim();
+        const num = parseNum(raw);
+        if (!raw || !isFinite(num)) continue;
+        n += 1; added += 1;
+        const row = { id: uid(), projectId: pid, order: Date.now() + n, pos: String(n).padStart(2, '0'), bez: src.bez, menge: num, expr: raw, einheit: src.kind === 'area' ? 'm²' : (src.unit || 'm'), manual: false, fromSketch: true };
+        if (src.kind === 'area') row.calc = { ok: true, result: num, steps: src.steps || [], parts: src.parts || [], faceLabel: src.bez, shapeLabel: 'Skizze', areaKind: 'projection', areaKindLabel: 'aus Maßen', isDeduction: false, edges: [], formula: ((src.steps || []).find((s) => s.startsWith('Formel:')) || '').replace('Formel: ', ''), substitution: ((src.steps || []).at(-1) || '').replace('Rechnung: ', ''), missing: [] };
+        await db.put('aufmass', row);
+      }
+      toast(added ? `${added} Positionen übernommen` : 'Nichts übernommen');
+      reload();
+    };
+  });
+}
 async function viewProject(pid, tab, q) {
   const p = await db.get('projects', pid); if (!p) return go('#/');
   const [photos, notes, am, sketches, sheets] = await Promise.all([db.byProject('photos', pid), db.byProject('notes', pid), db.byProject('aufmass', pid), db.byProject('sketches', pid), db.byProject('sheets', pid)]);
@@ -217,15 +275,15 @@ async function viewProject(pid, tab, q) {
       <button class="ib" data-mv="-1" aria-label="nach oben">↑</button><button class="ib" data-mv="1" aria-label="nach unten">↓</button><button class="ib" data-del aria-label="Löschen">🗑</button></div>
       <div class="src">= <b data-res>${r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : '–'}</b> ${esc(r.einheit || '')}${ph ? ` · aus <a href="#/measure/${ph.id}">Foto ${no.get(ph.id)}${it ? ' – ' + esc(it.name) : ''}</a>${r.manual ? ' (manuell geändert)' : ''}` : ''}${r.sketchId ? ` · <a href="#/sketch/${r.sketchId}">Skizze${r.calc?.faceLabel ? ' ' + esc(r.calc.faceLabel) : ''}</a>` : ''}${String(r.einheit || '').trim() === 'm²' && r.menge != null && r.menge !== '' && isFinite(+r.menge) ? ` · <label class="chk" style="display:inline-flex;min-height:0"><input type="checkbox" data-pick value="${esc(r.id)}"> zur Auswahl</label>` : ''}</div>
       ${r.calc ? `<pre class="calc">${esc(formatCalcText({ pos: r.pos, name: r.bez, calc: r.calc }))}</pre>` : ''}</div>`; };
-    const unlinked = photos.reduce((s, ph) => s + (ph.measure?.items || []).filter(it => !it.aufmassId && measureValue(ph.measure, it)).length, 0);
     T.innerHTML = `${units}<div id="amlist">${am.map(row).join('') || '<div class="empty">Noch keine Positionen. Manuell anlegen, im Foto messen oder in der Skizze rechnen.</div>'}</div>
-      <div class="grid2"><button class="btn primary" id="amAdd">＋ Position</button><button class="btn" id="amImp" ${unlinked ? '' : 'disabled'}>📐 Aus Fotos (${unlinked})</button></div>
+      <div class="grid2"><button class="btn primary" id="amAdd">＋ Position</button><button class="btn" id="amSketch">📐 Aus Skizzen</button></div>
+      <div id="skImp"></div>
       <button class="btn block" id="amSum" style="margin-top:8px">Gesamtfläche aus Auswahl</button>
       <button class="btn block" id="openSketch" style="margin-top:8px">Flächenskizze</button>
       <p class="small">Flächen entstehen im Zeichen-Editor: Foto oder leeres Blatt, Kante antippen, Maß eintragen, Ecke als rechten Winkel festlegen.</p>
       <p class="small" style="margin-top:12px">Einzelmaße werden nicht zu einer pauschalen Summe addiert. Eine Gesamtfläche entsteht nur aus angehakten, fachlich gleichen m²-Flächen. Rechenausdrücke wie <code>2*4,5+1,2</code> sind möglich.</p>`;
     $('#amAdd').onclick = async () => { const n = am.length + 1; await db.put('aufmass', { id: uid(), projectId: pid, order: Date.now(), pos: String(n).padStart(2, '0'), bez: '', menge: null, expr: '', einheit: 'm²' }); reload(); };
-    $('#amImp').onclick = async () => { for (const ph of photos) { let ch = false; for (const it of ph.measure?.items || []) { if (it.aufmassId) continue; const v = measureValue(ph.measure, it); if (!v) continue; it.aufmassId = await upsertAm(ph, it, v); ch = true; } if (ch) await db.put('photos', ph); } toast('Messungen übernommen'); reload(); };
+    $('#amSketch').onclick = () => sketchImport(pid, photos, reload);
     $('#openSketch').onclick = () => go(`#/p/${pid}?tab=sketches`);
     $('#amSum').onclick = async () => {
       const ids = new Set([...T.querySelectorAll('[data-pick]:checked')].map(el => el.value));
@@ -413,7 +471,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.5 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.6 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');
