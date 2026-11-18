@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 const require = createRequire('/tmp/baudoku-test/package.json');
 const { chromium } = require('playwright-core');
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { deflateSync, inflateSync } from 'node:zlib';
 import { test } from 'node:test';
@@ -80,7 +80,7 @@ try {
   });
   const page = await context.newPage();
   page.on('console', (m) => { if (m.type() === 'error' && !/favicon/i.test(m.text()) && !/Failed to load resource/i.test(m.text())) errors.push(m.text()); });
-  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('pageerror', (e) => { errors.push(String(e)); console.log('PAGEERROR', e); });
   page.on('response', (r) => { if (r.status() >= 400 && !r.url().includes('favicon')) errors.push('HTTP ' + r.status() + ' ' + r.url()); });
 
   await page.goto(base + 'css/app.css');
@@ -178,101 +178,21 @@ try {
 
   await page.getByText('Neubau Keep', { exact: true }).click();
   await page.locator('button[data-tab="aufmass"]').click();
-  await page.locator('#openSketch').click();
-  await page.waitForSelector('text=Bild wählen');
-  await page.locator('#in-sketch').setInputFiles(pngPath);
-  try {
-    await page.waitForSelector('#skCropFull', { timeout: 8000 });
-  } catch (e) {
-    console.log('SKETCH FAIL', errors);
-    console.log('files', await page.locator('#in-sketch').evaluate((el) => el.files.length));
-    console.log(await page.locator('#app').innerText());
-    console.log('URL', page.url());
-    throw e;
-  }
-  await page.locator('#skCropFull').click();
-  await page.waitForSelector('#sk-detect');
-  await page.waitForFunction(() => { const r = document.querySelector('#skCanvas')?.getBoundingClientRect(); return r && r.height > 80; });
-  await page.locator('#sk-detect').click();
-  await page.waitForFunction(() => (document.querySelector('#toast')?.textContent || '').length > 5);
-  const detectToast = await page.locator('#toast').innerText();
-  const suggested = await page.evaluate(() => window.__baudoku.editor.sketch.vertices.filter((v) => v.suggested).length);
-  if (suggested > 0) {
-    assert.match(detectToast, /ohne Maße/);
-    await page.locator('#skDrop').click();
-    await page.waitForFunction(() => window.__baudoku.editor.sketch.vertices.every((v) => !v.suggested));
-  } else {
-    assert.match(detectToast, /Keine klaren Kanten/);
-  }
-  await page.locator('[data-kind="top"]').click();
-  const pts = [[70, 50], [300, 50], [300, 200], [70, 200]];
-  for (const [x, y] of pts) {
-    const p = await page.evaluate(([ix, iy]) => window.__baudoku.editor.clientPoint(ix, iy), [x, y]);
-    await page.mouse.click(p.x, p.y);
-  }
-  await page.waitForFunction(() => window.__baudoku.editor.sketch.vertices.length >= 4);
-  await page.locator('#skClose').click();
-  await page.waitForFunction(() => window.__baudoku.editor.sketch.edges.length >= 4);
-  async function setEdge(nth, length, role) {
-    await page.locator('#skCtx [data-edge]').nth(nth).click();
-    await page.locator('.modal input[name="meters"]').fill(length);
-    await page.locator('.modal select[name="role"]').selectOption(role);
-    await page.locator('.modal select[name="aufmassId"]').selectOption('');
-    await page.locator('.modal button[type="submit"]').click();
-    await page.waitForSelector('.modal', { state: 'detached' });
-  }
-  await setEdge(0, '8,50', 'traufe');
-  await setEdge(1, '4,20', 'schraege');
-  await page.locator('#skFace').click();
-  await page.locator('.modal select[name="shape"]').selectOption('rect');
-  await page.locator('.modal select[name="areaMode"]').selectOption('sloped');
-  await page.locator('.modal select[name="slopeSource"]').selectOption('edge');
-  await page.locator('.modal button[type="submit"]').click();
-  await page.waitForFunction(() => (document.querySelector('#skCalc')?.textContent || '').includes('35,70'));
-  const calcText = await page.locator('#skCalc').innerText();
-  assert.match(calcText, /Dachfläche F1/);
-  assert.match(calcText, /a = 8,50 m/);
-  assert.match(calcText, /b = 4,20 m, gemessene schräge Dachlänge/);
-  assert.match(calcText, /Geneigte Dachfläche/);
-  await page.screenshot({ path: join(art, 'baudoku-sketch-mobile.png') });
-
-  await page.locator('#skBack').click();
-  await page.locator('button[data-tab="aufmass"]').click();
-  await page.waitForSelector('text=35,70');
+  await page.waitForSelector('input[value="Ortgang bleibt"]');
   assert.equal(await page.locator('input[value="Ortgang bleibt"]').count(), 1);
-  await page.screenshot({ path: join(art, 'baudoku-aufmass-calc.png') });
-  const traufe = page.locator('.am-row').filter({ has: page.locator('input[value="Traufe a"]') });
-  await traufe.locator('[data-k="menge"]').fill('10');
-  await traufe.locator('[data-k="menge"]').blur();
-  await page.waitForSelector('text=42,00');
-  assert.match(await page.locator('#amlist').innerText(), /42,00/);
-  await page.locator('#openSketch').click();
-  await page.locator('.card', { hasText: 'Skizze' }).click();
-  await page.waitForFunction(() => (document.querySelector('#skCalc')?.textContent || '').includes('42,00'));
-
-  await page.locator('#skBack').click();
   await page.locator('button[data-tab="export"]').click();
   await page.locator('#mkPdf').click();
   const pdfDl = await Promise.all([
     page.waitForEvent('download'),
     page.locator('#pdfOut [data-act="download"]').click(),
   ]).then((x) => x[0]);
-  const pdfPath = join(art, 'baudoku-sketch-sample.pdf');
+  const pdfPath = join(art, 'baudoku-stamp-sample.pdf');
   await pdfDl.saveAs(pdfPath);
-  const pdfRaw = readFileSync(pdfPath);
-  const text = pdfText(pdfRaw);
-  assert.match(text, /Dachfläche F1|Dachflache F1/);
-  assert.match(text, /42,00/);
-  assert.match(text, /F1/);
+  const text = pdfText(readFileSync(pdfPath));
+  assert.match(text, /Ortgang bleibt/);
   assert.match(text, /Musterdach GmbH/);
   const banned = String.fromCharCode(77, 101, 115, 99, 104, 101, 100, 101);
   assert.equal(text.includes(banned), false);
-
-  const pdfView = await context.newPage();
-  await pdfView.goto('file://' + pdfPath);
-  await pdfView.waitForTimeout(800);
-  await pdfView.screenshot({ path: join(art, 'baudoku-pdf-page.png') });
-  await pdfView.close();
 
   await page.locator('#mkZip').click();
   const zipDl = await Promise.all([
@@ -282,14 +202,14 @@ try {
   const zipPath = '/tmp/baudoku-backup.zip';
   await zipDl.saveAs(zipPath);
   const zipNote = await page.evaluate(async (buf) => {
-    const { Blob } = window;
     const blob = new Blob([Uint8Array.from(buf)]);
     const zip = await window.JSZip.loadAsync(blob);
     const data = JSON.parse(await zip.file('data.json').async('string'));
-    return { sketches: data.sketches?.length || 0, files: Object.keys(zip.files).filter((n) => n.startsWith('sketches/')) };
+    return { projects: (data.projects || []).map((p) => p.name), aufmass: (data.aufmass || []).map((r) => r.bez), sketches: Array.isArray(data.sketches) };
   }, [...readFileSync(zipPath)]);
-  assert.ok(zipNote.sketches >= 1);
-  assert.ok(zipNote.files.length >= 1);
+  assert.ok(zipNote.projects.includes('Neubau Keep'));
+  assert.ok(zipNote.aufmass.includes('Ortgang bleibt'));
+  assert.equal(zipNote.sketches, true);
 
   await page.locator('.hdr button[aria-label="Zurück"]').click();
   await page.locator('button[aria-label="Einstellungen"]').click();
@@ -298,14 +218,7 @@ try {
   await page.waitForSelector('text=Neubau Keep (Import)');
   await page.getByText('Neubau Keep (Import)').click();
   await page.locator('button[data-tab="aufmass"]').click();
-  await page.locator('#openSketch').click();
-  await page.waitForSelector('text=Skizze');
-  await page.locator('button[data-tab="aufmass"]').click();
-  await page.waitForFunction(() => {
-    const t = document.querySelector('#amlist')?.innerText || '';
-    const vals = [...document.querySelectorAll('#amlist input')].map((i) => i.value).join(' ');
-    return /Dachfläche F1/.test(t + vals);
-  });
+  await page.waitForSelector('input[value="Ortgang bleibt"]');
 
   await page.locator('.hdr button[aria-label="Zurück"]').click();
   await page.getByText('Neubau Keep', { exact: true }).click();
@@ -420,6 +333,183 @@ try {
   const sheetPdfText = pdfText(readFileSync(sheetPdfPath));
   if (!sheetPdfText.includes('Blatt Nord')) throw new Error('PDF ohne freie Skizze');
   void sheetUrl;
+
+  await page.evaluate(async (bytes) => {
+    const blob = new Blob([Uint8Array.from(bytes)], { type: 'image/png' });
+    const db = window.__baudoku.db;
+    await db.put('photos', { id: 'ph-v14', projectId: 'p-keep', created: 10, time: 10, caption: 'Altzeichnung', original: blob, stamped: blob, thumb: blob, width: 8, height: 8, source: 'gallery', markup: { hidePhoto: false, strokes: [{ tool: 'pen', points: [[0.2, 0.2], [0.4, 0.5], [0.6, 0.3]] }] } });
+    await db.put('sheets', { id: 'sh-v14', projectId: 'p-keep', title: 'Altblatt', width: 1000, height: 1400, created: 10, updated: 10, strokes: [{ tool: 'line', points: [[0.1, 0.2], [0.8, 0.2]] }] });
+    await db.put('sketches', {
+      id: 'sk-v14', projectId: 'p-keep', title: 'Altskitze', created: 10, updated: 10, imgW: 1000, imgH: 1000, faces: [], viewKind: 'unknown',
+      vertices: [{ id: 'v1', x: 100, y: 100 }, { id: 'v2', x: 500, y: 100 }, { id: 'v3', x: 500, y: 400 }, { id: 'v4', x: 100, y: 400 }],
+      edges: [
+        { id: 'e1', v1: 'v1', v2: 'v2', label: 'a', lengthM: 8.5 },
+        { id: 'e2', v1: 'v2', v2: 'v3', label: 'b', lengthM: 4 },
+        { id: 'e3', v1: 'v3', v2: 'v4', label: 'c', lengthM: 8.5 },
+        { id: 'e4', v1: 'v4', v2: 'v1', label: 'd', lengthM: 4 },
+      ],
+    });
+  }, [...readFileSync(pngPath)]);
+  await page.locator('button[data-tab="photos"]').click();
+  await page.locator('[data-draw="ph-v14"]').click();
+  try {
+    await page.waitForSelector('#drawBack', { timeout: 8000 });
+    await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.count() >= 1);
+  } catch (e) {
+    console.log('URL', page.url());
+    console.log('BODY', await page.locator('body').innerText());
+    console.log('ERRORS', errors);
+    throw e;
+  }
+  await page.locator('#drawBack').click();
+  await page.locator('.hdr button[aria-label="Zurück"]').click();
+  await page.locator('button[data-tab="sketches"]').click();
+  await page.getByText('Altblatt', { exact: true }).click();
+  await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.count() === 1 && /Altblatt/.test(document.querySelector('#drawTitle').textContent));
+  await page.locator('#drawBack').click();
+  await page.getByText('Altskitze', { exact: true }).click();
+  await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.edges() === 4);
+  const legacyKept = await page.evaluate(async () => {
+    const sk = await window.__baudoku.db.get('sketches', 'sk-v14');
+    return sk.vertices.length === 4 && sk.edges.length === 4 && sk.edges[0].lengthM === 8.5;
+  });
+  if (!legacyKept) throw new Error('alte Flächenskizze wurde verändert');
+  await page.locator('#drawBack').click();
+
+  await page.locator('#newSheet').click();
+  await page.locator('.modal input[name="title"]').fill('Rechteck Dach');
+  await page.locator('.modal button[type="submit"]').click();
+  await page.waitForFunction(() => { const r = document.querySelector('#drawCanvas')?.getBoundingClientRect(); return r && r.height > 120 && window.__baudoku.draw; });
+  const pt = async (nx, ny) => page.evaluate(([x, y]) => window.__baudoku.draw.clientPoint(x, y), [nx, ny]);
+  const gesture = async (pts) => {
+    const c = page.locator('#drawCanvas');
+    const fire = (type, p) => c.dispatchEvent(type, { clientX: p.x, clientY: p.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: type === 'pointerup' ? 0 : 1 });
+    await fire('pointerdown', pts[0]);
+    for (const p of pts.slice(1)) await fire('pointermove', p);
+    await fire('pointerup', pts[pts.length - 1]);
+  };
+  const waitMsg = (needle) => page.waitForFunction((s) => (document.querySelector('#drawMsg')?.textContent || '').includes(s), needle);
+  await page.locator('#draw-text').click();
+  await gesture([await pt(0.5, 0.12)]);
+  await page.waitForFunction(() => document.activeElement?.id === 'drawInput' && document.querySelector('#drawInput')?.getAttribute('inputmode') === 'text');
+  await page.locator('#drawInput').fill('Kamin');
+  await page.locator('#drawForm button[type="submit"]').click();
+  await page.waitForFunction(() => window.__baudoku.draw.texts().some((t) => t.text === 'Kamin') && document.querySelector('#drawForm').hidden);
+  await gesture([await pt(0.5, 0.12)]);
+  await page.waitForFunction(() => document.activeElement?.id === 'drawInput');
+  await page.locator('#drawInput').fill('Kamin Ost');
+  await page.locator('#drawForm button[type="submit"]').click();
+  await page.waitForFunction(() => window.__baudoku.draw.texts().some((t) => t.text === 'Kamin Ost') && document.querySelector('#drawForm').hidden);
+  const from = await pt(0.5, 0.12);
+  const to = await pt(0.66, 0.12);
+  const canvas = page.locator('#drawCanvas');
+  await canvas.dispatchEvent('pointerdown', { clientX: from.x, clientY: from.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+  await canvas.dispatchEvent('pointermove', { clientX: to.x, clientY: to.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+  await canvas.dispatchEvent('pointerup', { clientX: to.x, clientY: to.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+  await page.waitForFunction(() => window.__baudoku.draw.texts().some((t) => t.text === 'Kamin Ost' && t.x > 0.55));
+  if (!await page.locator('#drawForm').isHidden()) await page.locator('#drawForm button[type="submit"]').click();
+
+  await page.locator('#draw-line').click();
+  await gesture([await pt(0.2, 0.2), await pt(0.8, 0.8)]);
+  await gesture([await pt(0.2, 0.8), await pt(0.8, 0.2)]);
+  const end = await pt(0.23, 0.17);
+  const cross = await pt(0.52, 0.48);
+  await canvas.dispatchEvent('pointerdown', { clientX: end.x, clientY: end.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+  await page.waitForSelector('#snapMark:not([hidden])');
+  await page.screenshot({ path: join(art, 'baudoku-snap-endpunkt.png') });
+  await canvas.dispatchEvent('pointermove', { clientX: cross.x, clientY: cross.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+  await page.waitForSelector('#snapMark:not([hidden])');
+  await page.screenshot({ path: join(art, 'baudoku-snap.png') });
+  await canvas.dispatchEvent('pointerup', { clientX: cross.x, clientY: cross.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 3);
+  for (let i = 0; i < 3; i++) await page.locator('#draw-undo').click();
+  await page.waitForFunction(() => window.__baudoku.draw.count() === 0);
+
+  const rect = [[0.22, 0.28], [0.78, 0.28], [0.78, 0.62], [0.22, 0.62]];
+  for (let i = 0; i < rect.length; i++) {
+    const a = rect[i], b = rect[(i + 1) % rect.length];
+    await gesture([await pt(a[0], a[1]), await pt(b[0], b[1])]);
+  }
+  await page.waitForFunction(() => window.__baudoku.draw.nodes() === 4 && window.__baudoku.draw.edges() === 4);
+  await page.locator('#draw-area').click();
+  await gesture([await pt(0.5, 0.45)]);
+  await waitMsg('Winkel bei Punkt');
+  await page.screenshot({ path: join(art, 'baudoku-fehlt.png') });
+  for (const p of rect) {
+    await page.locator('#draw-area').click();
+    await gesture([await pt(p[0], p[1])]);
+    await page.locator('#btn-right').click();
+  }
+  async function measureAt(nx, ny, value, shot) {
+    await page.locator('#draw-measure').click();
+    await gesture([await pt(nx, ny)]);
+    await page.waitForSelector('#drawInput');
+    const mode = await page.locator('#drawInput').getAttribute('inputmode');
+    if (mode !== 'decimal') throw new Error('inputmode ' + mode);
+    if (shot) await page.screenshot({ path: shot });
+    await page.locator('#drawInput').fill(value);
+    await page.locator('#drawUnit').selectOption('m');
+    await page.locator('#drawForm button[type="submit"]').click();
+    await page.waitForFunction(() => document.querySelector('#drawForm').hidden);
+  }
+  await measureAt(0.5, 0.28, '8,50', join(art, 'baudoku-mass.png'));
+  await measureAt(0.78, 0.45, '4,20');
+  await waitMsg('35,70');
+  await page.screenshot({ path: join(art, 'baudoku-flaeche.png') });
+  if (!/abgeleitet/.test(await page.locator('#drawMsg').innerText())) throw new Error(await page.locator('#drawMsg').innerText());
+  await page.reload();
+  await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.edges() === 4);
+  await page.locator('#draw-area').click();
+  await gesture([await pt(0.5, 0.45)]);
+  await waitMsg('35,70');
+  await measureAt(0.78, 0.45, '5');
+  await waitMsg('42,50');
+  await measureAt(0.5, 0.62, '9');
+  await waitMsg('verschieden');
+  await page.screenshot({ path: join(art, 'baudoku-widerspruch.png') });
+  await page.locator('#draw-undo').click();
+  await page.locator('#draw-undo').click();
+  await waitMsg('35,70');
+
+  await page.locator('#drawBack').click();
+  await page.locator('#newSheet').click();
+  await page.locator('.modal input[name="title"]').fill('L-Form');
+  await page.locator('.modal button[type="submit"]').click();
+  await page.waitForFunction(() => window.__baudoku.draw && /L-Form/.test(document.querySelector('#drawTitle').textContent));
+  const L = [[0.15, 0.22], [0.78, 0.22], [0.78, 0.42], [0.48, 0.42], [0.48, 0.62], [0.15, 0.62]];
+  for (let i = 0; i < L.length; i++) {
+    const a = L[i], b = L[(i + 1) % L.length];
+    await page.locator('#draw-line').click();
+    await gesture([await pt(a[0], a[1]), await pt(b[0], b[1])]);
+  }
+  const shape = await page.evaluate(() => ({ nodes: window.__baudoku.draw.nodes(), edges: window.__baudoku.draw.edges() }));
+  if (shape.nodes !== 6 || shape.edges !== 6) throw new Error('L-Form ' + JSON.stringify(shape));
+  for (const p of L) {
+    await page.locator('#draw-area').click();
+    await gesture([await pt(p[0], p[1])]);
+    await page.locator('#btn-right').click();
+  }
+  const measures = [[0.46, 0.22, '8'], [0.78, 0.32, '3'], [0.63, 0.42, '3'], [0.48, 0.52, '2'], [0.31, 0.62, '5']];
+  for (const [x, y, v] of measures) await measureAt(x, y, v);
+  await waitMsg('34,00');
+  const lmsg = await page.locator('#drawMsg').innerText();
+  if (!lmsg.includes('F1') || !lmsg.includes('F2') || !lmsg.includes('abgeleitet')) throw new Error(lmsg);
+  await page.screenshot({ path: join(art, 'baudoku-lform.png') });
+  await page.locator('#drawBack').click();
+  await page.locator('button[data-tab="aufmass"]').click();
+  await page.waitForSelector('input[value="Ortgang bleibt"]');
+  assert.equal(await page.locator('input[value="Ortgang bleibt"]').count(), 1);
+  await page.locator('button[data-tab="export"]').click();
+  await page.locator('#mkPdf').click();
+  const calcPdf = await Promise.all([page.waitForEvent('download'), page.locator('#pdfOut [data-act="download"]').click()]).then((x) => x[0]);
+  const calcPdfPath = join(art, 'baudoku-rechenweg.pdf');
+  await calcPdf.saveAs(calcPdfPath);
+  const calcText = pdfText(readFileSync(calcPdfPath));
+  for (const needle of ['35,70', '34,00', 'abgeleitet', 'F1', 'F2', 'Musterdach GmbH', 'Rechteck Dach', 'L-Form']) {
+    if (!calcText.includes(needle)) throw new Error('PDF ohne ' + needle);
+  }
+  assert.equal(calcText.includes(banned), false);
+  execFileSync('pdftoppm', ['-png', '-r', '110', calcPdfPath, join(art, 'baudoku-pdf-page')]);
 
   assert.deepEqual(errors, [], errors.join('\n'));
   await context.close();

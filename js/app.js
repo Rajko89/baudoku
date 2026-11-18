@@ -7,11 +7,11 @@ import { emptyMeasure, measureValue } from './geom.js';
 import { mountEditor, rectify, fmtVal } from './measure.js';
 import { buildPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
-import { emptySketch, mountSketch, resyncProjectSketches } from './sketch.js';
+import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.4.0';
+const APP_VERSION = 'baudoku-v1.5.0';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true };
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
@@ -222,7 +222,7 @@ async function viewProject(pid, tab, q) {
       <div class="grid2"><button class="btn primary" id="amAdd">＋ Position</button><button class="btn" id="amImp" ${unlinked ? '' : 'disabled'}>📐 Aus Fotos (${unlinked})</button></div>
       <button class="btn block" id="amSum" style="margin-top:8px">Gesamtfläche aus Auswahl</button>
       <button class="btn block" id="openSketch" style="margin-top:8px">Flächenskizze</button>
-      <p class="small">Markierungen auf dem Foto: in der Foto-Übersicht auf ✎ tippen. Die Flächenskizze mit Kanten a, b, c bleibt hier.</p>
+      <p class="small">Flächen entstehen im Zeichen-Editor: Foto oder leeres Blatt, Kante antippen, Maß eintragen, Ecke als rechten Winkel festlegen.</p>
       <p class="small" style="margin-top:12px">Einzelmaße werden nicht zu einer pauschalen Summe addiert. Eine Gesamtfläche entsteht nur aus angehakten, fachlich gleichen m²-Flächen. Rechenausdrücke wie <code>2*4,5+1,2</code> sind möglich.</p>`;
     $('#amAdd').onclick = async () => { const n = am.length + 1; await db.put('aufmass', { id: uid(), projectId: pid, order: Date.now(), pos: String(n).padStart(2, '0'), bez: '', menge: null, expr: '', einheit: 'm²' }); reload(); };
     $('#amImp').onclick = async () => { for (const ph of photos) { let ch = false; for (const it of ph.measure?.items || []) { if (it.aufmassId) continue; const v = measureValue(ph.measure, it); if (!v) continue; it.aufmassId = await upsertAm(ph, it, v); ch = true; } if (ch) await db.put('photos', ph); } toast('Messungen übernommen'); reload(); };
@@ -255,24 +255,13 @@ async function viewProject(pid, tab, q) {
 
   if (tab === 'sketches') {
     T.innerHTML = `<h2 class="sec" style="text-transform:none;color:inherit;font-size:1.25rem">Skizze</h2>
-      <button class="btn primary block" id="newSheet">Freie Skizze (leeres Blatt)</button>
+      <div class="grid2"><button class="btn" id="editPhotos">Foto bearbeiten</button><button class="btn primary" id="newSheet">Neue Skizze auf leerem Blatt</button></div>
+      <p class="small">Freie Skizze (leeres Blatt) und Zeichnen auf einem Foto nutzen denselben Editor. Flächenskizzen aus älteren Versionen öffnen sich ebenfalls dort.</p>
       <div id="sheetList" style="margin-top:10px">${sheets.map(s => `<div class="card" style="display:flex;align-items:center;gap:8px"><div class="meta" style="flex:1" data-nav="#/sheet/${s.id}"><div class="t">${esc(s.title || 'Freie Skizze')}</div><div class="small">${(s.strokes || []).length} Striche</div></div><button type="button" class="btn danger del" data-del-sheet="${s.id}">Löschen</button></div>`).join('') || '<p class="small">Noch kein leeres Blatt.</p>'}
-      <h3 class="sec">Flächenskizze</h3><p class="small">Dachflächen mit Kanten a, b, c. Freihand auf einem Foto: in Fotos auf <b>Zeichnen</b> tippen. Maße nur aus eingegebenen Werten, einer Referenzlänge oder einem Referenzrechteck.</p>
-      <div class="grid2"><button class="btn primary" id="skCam">📷 Aufnehmen</button><button class="btn" id="skGal">🖼 Bild wählen</button></div>
-      <div id="skList" style="margin-top:12px">${sketches.map(s => `<div class="card" data-nav="#/sketch/${s.id}"><div class="meta"><div class="t">${esc(s.title || 'Skizze')}</div><div class="small">${(s.faces || []).length} Flächen · ${(s.edges || []).length} Kanten</div></div></div>`).join('') || '<div class="empty">Noch keine Skizze.</div>'}
-      ${photos.length ? `<h3 class="sec">Vorhandenes Foto</h3><div class="pgrid">${photos.map((x, i) => `<button type="button" class="ph" data-use-photo="${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span></button>`).join('')}</div>` : ''}</div>`;
+      <h3 class="sec">Flächenskizze</h3>
+      <div id="skList">${sketches.map(s => `<div class="card" data-nav="#/sketch/${s.id}"><div class="meta"><div class="t">${esc(s.title || 'Flächenskizze')}</div><div class="small">${(s.faces || []).length} Flächen · ${(s.edges || []).length} Kanten</div></div></div>`).join('') || '<p class="small">Keine ältere Flächenskizze.</p>'}</div>`;
+    $('#editPhotos').onclick = () => go(`#/p/${pid}?tab=photos`);
     $('#newSheet').onclick = () => newSheet(pid);
-    const cam = $('#in-sketch-cam'), gal = $('#in-sketch');
-    $('#skCam').onclick = () => cam.click();
-    $('#skGal').onclick = () => gal.click();
-    const take = async (file, photoId) => { if (!file) return; await beginSketch(pid, file, photoId); };
-    const onFile = async (input) => { try { const f = input.files[0]; input.value = ''; await take(f); } catch (e) { console.error(e); toast('Bild konnte nicht übernommen werden'); } };
-    cam.onchange = () => onFile(cam);
-    gal.onchange = () => onFile(gal);
-    T.querySelectorAll('[data-use-photo]').forEach(b => b.onclick = async () => {
-      const ph = photos.find(x => x.id === b.dataset.usePhoto);
-      if (ph?.original) await beginSketch(pid, ph.original, ph.id);
-    });
   }
 
   if (tab === 'export') {
@@ -424,7 +413,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.4 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.5 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');
@@ -475,21 +464,15 @@ async function viewDraw(id) {
   cleanup.push(() => ed.destroy());
   window.__baudoku.draw = ed;
 }
-async function beginSketch(pid, blob, photoId) {
-  const sk = emptySketch(pid);
-  sk.sourceImage = blob;
-  sk.sourcePhotoId = photoId || null;
-  await db.put('sketches', sk);
-  await touchProject(pid);
-  go(`#/sketch/${sk.id}`);
-}
 async function viewSketch(id) {
-  const sk = await db.get('sketches', id); if (!sk?.sourceImage) return go('#/');
-  const img = await loadImg(sk.sourceImage); cleanup.push(() => URL.revokeObjectURL(img._url));
-  APP.innerHTML = '<div id="skroot"></div>';
-  const ed = mountSketch($('#skroot'), { sketch: sk, img, onBack: () => go(`#/p/${sk.projectId}?tab=sketches`) });
+  const sk = await db.get('sketches', id); if (!sk) return go('#/');
+  const blob = sk.sourceImage;
+  const img = blob ? await loadImg(blob) : null;
+  if (img) cleanup.push(() => URL.revokeObjectURL(img._url));
+  APP.innerHTML = '<div id="drawroot"></div>';
+  const ed = mountDraw($('#drawroot'), { sketch: sk, img, onBack: () => go(`#/p/${sk.projectId}?tab=sketches`) });
   cleanup.push(() => ed.destroy());
-  window.__baudoku.editor = ed;
+  window.__baudoku.draw = ed;
 }
 
 /* ---------- Start ---------- */

@@ -4,7 +4,8 @@ import { drawToCanvas } from './media.js';
 import { renderAnnotated, fmtVal } from './measure.js';
 import { measureValue, realMapper } from './geom.js';
 import { renderSketch } from './sketch.js';
-import { renderMarkup, blankCanvas } from './draw.js';
+import { renderDoc, blankCanvas } from './draw.js';
+import { importLegacyStrokes, evaluateCycle, findCycles } from './plan.js';
 import { computeFace, formatCalcText, scaleWarning } from './sketch-calc.js';
 
 const M = 15, PW = 210, PH = 297, CW = PW - 2 * M;
@@ -13,7 +14,7 @@ const ACC = [232, 89, 12], DARK = [31, 41, 51], GREY = [91, 102, 114];
 async function jpeg(blob, max = 1600, q = 0.82, markup) {
   const img = await loadImg(blob);
   try {
-    const c = markup?.strokes?.length ? renderMarkup(img, markup, { max }) : drawToCanvas(img, max);
+    const c = markup?.doc || markup?.strokes?.length ? renderDoc(img, markup.doc || importLegacyStrokes(markup.strokes || []), { max }) : drawToCanvas(img, max);
     return { data: c.toDataURL('image/jpeg', q), w: c.width, h: c.height };
   } finally { URL.revokeObjectURL(img._url); }
 }
@@ -117,12 +118,17 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
     for (const sh of sheets) {
       progress(sh.title || 'Freie Skizze');
       newPage(); h1(sh.title || 'Freie Skizze');
-      const c = renderMarkup(blankCanvas(sh.width || 1000, sh.height || 1400), { strokes: sh.strokes || [] }, { hidePhoto: true, max: 1400 });
+      const drawn = sh.doc || importLegacyStrokes(sh.strokes || []);
+      const c = renderDoc(blankCanvas(sh.width || 1000, sh.height || 1400), drawn, { hidePhoto: true, max: 1400 });
       const data = c.toDataURL('image/jpeg', 0.86);
       const maxH = 220;
       let w = CW, h = w * c.height / c.width; if (h > maxH) { h = maxH; w = h * c.width / c.height; }
       doc.addImage(data, 'JPEG', M + (CW - w) / 2, y, w, h); y += h + 4;
-      txt('Freie Skizze, leeres Blatt. Striche sind getrennt vom Foto gespeichert.', 8.5, 'italic', GREY);
+      txt('Freie Skizze, leeres Blatt.', 8.5, 'italic', GREY);
+      for (const cyc of findCycles(drawn)) {
+        const ev = evaluateCycle(drawn, cyc.nodes);
+        ev.steps.forEach((line) => txt(line, 10));
+      }
     }
   }
 

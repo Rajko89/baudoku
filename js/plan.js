@@ -160,6 +160,9 @@ function edgeMeters(e) {
   if (!e?.measure || e.measure.source === 'derived') return null;
   return toMeters(e.measure.value, e.measure.unit || 'm');
 }
+function edgeNotes(edges, lens) {
+  return edges.map((e, i) => ({ id: e.id, text: `${fmtNum(lens[i])} m`, derived: edgeMeters(e) == null }));
+}
 function fail(missing, contradictions = []) {
   return { ok: false, missing, contradictions, area: null, steps: [...missing, ...contradictions], parts: [] };
 }
@@ -211,7 +214,7 @@ function rectangleEval(doc, ids, edges) {
   edges.forEach((e, i) => steps.push(`${e.label} = ${fmtNum(lens[i])} m${edgeMeters(e) == null ? ' (abgeleitet)' : ''}`));
   steps.push('Formel: A = a x b');
   steps.push(`Rechnung: ${fmtNum(lens[0])} m x ${fmtNum(lens[1])} m = ${fmtNum(area)} m²`);
-  return { ok: true, missing: [], contradictions: [], area, steps, parts: [{ label: 'F1', formula: 'A = a x b', result: area }] };
+  return { ok: true, missing: [], contradictions: [], area, steps, parts: [{ label: 'F1', formula: 'A = a x b', result: area }], edgeNotes: edgeNotes(edges, lens) };
 }
 
 function triangleEval(doc, ids, edges) {
@@ -313,7 +316,7 @@ function orthogonalEval(doc, ids, edges) {
   const sumA = parts.reduce((s, p) => s + p.result, 0);
   steps.push(`Formel: A = ${parts.map((p) => p.label).join(' + ')}`);
   steps.push(`Rechnung: ${parts.map((p) => fmtNum(p.result) + ' m²').join(' + ')} = ${fmtNum(sumA)} m²`);
-  return { ok: true, missing: [], contradictions: [], area: sumA, steps, parts };
+  return { ok: true, missing: [], contradictions: [], area: sumA, steps, parts, edgeNotes: edgeNotes(edges, lens) };
 }
 function sliceRects(pts) {
   const ys = [...new Set(pts.map((p) => Math.round(p.y * 1000) / 1000))].sort((a, b) => a - b);
