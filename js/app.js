@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.6.2';
+const APP_VERSION = 'baudoku-v1.6.3';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true };
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
@@ -125,19 +125,26 @@ const touchProject = async pid => { const p = await db.get('projects', pid); if 
 /* ---------- Foto hinzufügen ---------- */
 async function addPhoto(pid, blob, source) {
   const project = await db.get('projects', pid); const s = await settings();
-  let time = Date.now(), lat = null, lon = null, acc = null;
+  let time = Date.now(), lat = null, lon = null, acc = null, timeKind = 'capture';
+  const ex = source === 'rectified' ? null : await readExif(blob);
   if (source === 'gallery') {
-    const ex = await readExif(blob);
-    if (ex?.time) time = ex.time; else if (blob.lastModified) time = blob.lastModified;
+    if (ex?.time) { time = ex.time; timeKind = 'exif'; }
+    else { time = blob.lastModified || Date.now(); timeKind = 'import'; }
     if (ex?.lat != null) { lat = ex.lat; lon = ex.lon; acc = ex.acc ?? null; }
-  } else if (source !== 'rectified') { const f = await getFix(); if (f) { lat = f.lat; lon = f.lon; acc = f.acc; } }
+  } else if (source !== 'rectified') {
+    if (ex?.time) time = ex.time;
+    const f = await getFix(180000);
+    if (f) { lat = f.lat; lon = f.lon; acc = f.acc; }
+    else if (ex?.lat != null) { lat = ex.lat; lon = ex.lon; acc = ex.acc ?? null; }
+  }
   const address = lat != null && s.geocode ? await reverseGeocode(lat, lon) : '';
   const original = new Blob([blob], { type: blob.type || 'image/jpeg' });
-  const meta = { projectName: project.name, firma: s.stampFirma ? s.firma : '', time, lat, lon, acc, address, source };
+  const meta = { projectName: project.name, firma: s.stampFirma ? s.firma : '', time, lat, lon, acc, address, source, timeKind };
   const r = await processImage(original, meta);
-  const rec = { id: uid(), projectId: pid, created: Date.now(), time, lat, lon, acc, address, source, caption: '', original, stamped: r.stamped, thumb: r.thumb, width: r.width, height: r.height, measure: emptyMeasure() };
+  const rec = { id: uid(), projectId: pid, created: Date.now(), time, timeKind, lat, lon, acc, address, source, caption: '', original, stamped: r.stamped, thumb: r.thumb, width: r.width, height: r.height, measure: emptyMeasure() };
   await db.put('photos', rec); await touchProject(pid);
   if (navigator.storage?.persist) navigator.storage.persist().catch(() => { });
+  if ((source === 'camera' || source === 'live') && lat == null) toast('Foto mit Datum gespeichert. Ort nicht verfügbar – Standort für diese Seite erlauben.');
   return rec;
 }
 async function addFiles(pid, files, source) {
@@ -152,7 +159,7 @@ async function addFiles(pid, files, source) {
 async function restamp(ph) {
   const project = await db.get('projects', ph.projectId); const s = await settings();
   if (!ph.address && ph.lat != null && s.geocode) ph.address = await reverseGeocode(ph.lat, ph.lon);
-  const r = await processImage(ph.original, { projectName: project.name, firma: s.stampFirma ? s.firma : '', time: ph.time, lat: ph.lat, lon: ph.lon, acc: ph.acc, address: ph.address, source: ph.source });
+  const r = await processImage(ph.original, { projectName: project.name, firma: s.stampFirma ? s.firma : '', time: ph.time, lat: ph.lat, lon: ph.lon, acc: ph.acc, address: ph.address, source: ph.source, timeKind: ph.timeKind });
   ph.stamped = r.stamped; ph.thumb = r.thumb; await db.put('photos', ph);
 }
 
@@ -237,14 +244,14 @@ async function viewProject(pid, tab, q) {
       <div class="grid2" style="margin-top:8px"><button class="btn" id="bLive">🎥 Live-Kamera (Serie)</button><button class="btn" id="bGal">🖼 Aus Galerie</button></div></div>`;
     const upd = () => { const g = geoState(); const d = $('#gdot'), t = $('#gtxt'); if (!d) return;
       if (g.fix) { const a = g.fix.acc; d.className = 'dot ' + (a <= 15 ? 'ok' : a <= 50 ? 'mid' : 'bad'); t.textContent = `GPS ±${fmtNum(a, 0)} m · ${fmtCoord(g.fix.lat, g.fix.lon, 5)}`; }
-      else { d.className = 'dot' + (g.err ? ' bad' : ''); t.textContent = !g.supported ? 'GPS nicht unterstützt' : g.err ? g.err + ' – Fotos ohne Ortsstempel' : 'GPS wird gesucht …'; } };
+      else { d.className = 'dot' + (g.err ? ' bad' : ''); t.textContent = !g.supported ? 'GPS nicht unterstützt – Datum wird trotzdem gestempelt' : g.err ? g.err + ' – Datum wird gestempelt, Ort fehlt' : 'GPS wird gesucht …'; } };
     cleanup.push(onGeo(upd)); upd();
     const inCam = $('#in-camera'), inGal = $('#in-gallery');
     inCam.onchange = async () => { const fs = [...inCam.files]; inCam.value = ''; await addFiles(pid, fs, 'camera'); reload(); };
     inGal.onchange = async () => { const fs = [...inGal.files]; inGal.value = ''; await addFiles(pid, fs, 'gallery'); reload(); };
-    $('#bCam').onclick = () => inCam.click();
+    $('#bCam').onclick = () => { startGeo(); inCam.click(); };
     $('#bGal').onclick = () => inGal.click();
-    $('#bLive').onclick = async () => { let chain = Promise.resolve(); const ok = await liveCamera(b => { chain = chain.then(() => addPhoto(pid, b, 'live')).catch(console.error); }); await chain; if (ok) reload(); };
+    $('#bLive').onclick = async () => { startGeo(); let chain = Promise.resolve(); const ok = await liveCamera(b => { chain = chain.then(() => addPhoto(pid, b, 'live')).catch(console.error); }); await chain; if (ok) reload(); };
   }
 
   if (tab === 'notes') {
@@ -405,7 +412,7 @@ async function viewPhoto(id) {
     <div class="row" style="margin:8px 0"><button class="btn sm" data-v="stamped">Mit Stempel</button><button class="btn sm" data-v="original">Original</button></div>
     <label class="f">Bildbeschreibung<textarea class="inp" id="cap" style="min-height:70px" placeholder="z. B. Kehle Nordseite, Ziegel gebrochen">${esc(ph.caption)}</textarea></label>
     <div class="grid2"><button class="btn primary" data-nav="#/measure/${id}">📐 Aufmaß${items.length ? ` (${items.length})` : ''}</button><button class="btn" data-nav="#/p/${ph.projectId}?tab=notes&photo=${id}">📝 Notiz</button></div>
-    <div class="card" style="margin-top:10px"><div class="kv"><b>Aufnahme</b><span>${fmtDateTime(ph.time, true)}${ph.source === 'gallery' ? ' (aus Galerie)' : ''}</span>
+    <div class="card" style="margin-top:10px"><div class="kv"><b>Aufnahme</b><span>${fmtDateTime(ph.time, true)}${ph.timeKind === 'import' ? ' (Importzeit)' : ph.timeKind === 'exif' ? ' (Bilddatum)' : ph.source === 'gallery' ? ' (aus Galerie)' : ''}</span>
       <b>GPS</b><span>${ph.lat != null ? `<a href="https://www.openstreetmap.org/?mlat=${ph.lat}&mlon=${ph.lon}#map=19/${ph.lat}/${ph.lon}" target="_blank" rel="noopener">${fmtCoord(ph.lat, ph.lon)}</a>${ph.acc != null ? ` ±${fmtNum(ph.acc, 0)} m` : ''}` : 'nicht verfügbar'}</span>
       <b>Adresse</b><span>${esc(ph.address || '–')}</span><b>Größe</b><span>${ph.width} × ${ph.height} px</span></div></div>
     ${items.length ? `<div class="card"><b>Messungen</b><div class="mlist">${items.map(it => `<div class="mi"><span class="n">${esc(it.name)}</span><span class="v">${fmtVal(measureValue(ph.measure, it))}</span></div>`).join('')}</div></div>` : ''}
@@ -472,7 +479,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.6.2 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.6.3 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');

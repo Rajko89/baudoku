@@ -202,6 +202,29 @@ try {
     await measure(0.7, 0.45, '50', 'cm');
     await page.waitForFunction(() => (window.__baudoku.draw.faces()[0]?.text || '').includes('0,50'));
 
+    await sheet('Kürzen');
+    await page.locator('#draw-line').click();
+    await gesture([await at(0.18, 0.42), await at(0.78, 0.42)]);
+    const long = await page.evaluate(() => window.__baudoku.draw.edgeEnds()[0]);
+    const finger = page.locator('#drawCanvas');
+    const tip = await at(long.x2, long.y2);
+    const back = await at(long.x2 - 0.24, long.y2);
+    await finger.dispatchEvent('pointerdown', { clientX: tip.x + 5, clientY: tip.y + 4, pointerId: 7, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointermove', { clientX: tip.x + 8, clientY: tip.y - 3, pointerId: 7, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointermove', { clientX: tip.x + 3, clientY: tip.y + 6, pointerId: 7, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointermove', { clientX: back.x, clientY: back.y + 2, pointerId: 7, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointerup', { clientX: back.x, clientY: back.y, pointerId: 7, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+    const shortLine = await page.evaluate(() => window.__baudoku.draw.edgeEnds());
+    assert.equal(shortLine.length, 1, JSON.stringify(shortLine));
+    assert.ok(shortLine[0].x2 < long.x2 - 0.1, JSON.stringify({ long, shortLine }));
+    if (tag === 'phone') await page.screenshot({ path: join(art, 'baudoku-linie-kuerzer.png') });
+    const body = await at((shortLine[0].x1 + shortLine[0].x2) / 2, shortLine[0].y1);
+    await finger.dispatchEvent('pointerdown', { clientX: body.x, clientY: body.y, pointerId: 8, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointermove', { clientX: body.x + 7, clientY: body.y + 3, pointerId: 8, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await finger.dispatchEvent('pointerup', { clientX: body.x + 7, clientY: body.y + 3, pointerId: 8, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+    assert.equal(await page.evaluate(() => window.__baudoku.draw.edges()), 1);
+    await page.waitForFunction(() => window.__baudoku.draw.selected());
+
     await sheet('Korrigieren');
     await page.locator('#draw-line').click();
     await gesture([await at(0.2, 0.35), await at(0.55, 0.35)]);
@@ -252,11 +275,18 @@ try {
     assert.equal(moved.a.m, 8.5);
     await page.locator('#draw-undo').click();
     await page.waitForFunction((x) => Math.abs(window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a').x2 - x) < 0.04, top.x2);
+    const corner = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a'));
+    await gesture([await at(corner.x2, corner.y2), await at(corner.x2 - 0.12, corner.y2 + 0.01)]);
+    const cornerAfter = await page.evaluate(() => ({ n: window.__baudoku.draw.edges(), a: window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a'), face: window.__baudoku.draw.faces()[0].text }));
+    assert.equal(cornerAfter.n, 4);
+    assert.ok(cornerAfter.a.x2 < corner.x2 - 0.05, JSON.stringify(cornerAfter));
+    assert.match(cornerAfter.face, /35,70/);
+    assert.equal(cornerAfter.a.m, 8.5);
     void side;
 
     await page.locator('#draw-free').click();
     await gesture([await at(0.15, 0.75), await at(0.45, 0.75)]);
-    await gesture([await at(0.3, 0.75)]);
+    await page.locator('#draw-edit').click();
     const free0 = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.free));
     await gesture([await at(free0.x2, free0.y2), await at(free0.x2, free0.y2 - 0.12)]);
     const free1 = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.free));

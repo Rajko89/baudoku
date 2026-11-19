@@ -156,6 +156,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-pen"><span>✎</span>Stift</button>
       <button type="button" id="draw-line" class="on"><span>／</span>Linie</button>
       <button type="button" id="draw-free"><span>∿</span>Freie Linie</button>
+      <button type="button" id="draw-edit"><span>✥</span>Bearbeiten</button>
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
@@ -182,10 +183,45 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const s = Math.min(canvas.width / iw, canvas.height / ih);
     view = { s, ox: (canvas.width - iw * s) / 2, oy: (canvas.height - ih * s) / 2, iw, ih };
   }
-  function radiusNorm() {
+  function pxPerNorm() {
     const r = canvas.getBoundingClientRect();
-    const css = view.iw * view.s * (r.width / canvas.width);
-    return css > 1 ? 22 / css : 0.04;
+    return view.iw * view.s * (r.width / canvas.width) || 1;
+  }
+  function px(n) { const k = pxPerNorm(); return k > 1 ? n / k : 0.05; }
+  function cssDist(x0, y0, x1, y1) { return Math.hypot(x1 - x0, y1 - y0) * (pxPerNorm() > 1 ? pxPerNorm() : 400); }
+  function radiusNorm() { return px(22); }
+  function angDiff(a, b) {
+    let d = a - b;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    return Math.abs(d);
+  }
+  function nearestNode(p, css) {
+    const r = px(css);
+    let best = null, bd = r;
+    for (const n of doc.nodes) {
+      const d = Math.hypot(n.x - p[0], n.y - p[1]);
+      if (d <= bd) { bd = d; best = n; }
+    }
+    return best;
+  }
+  function edgeAxis(node, edge) {
+    const o = nodeById(doc, edge.a === node.id ? edge.b : edge.a);
+    if (!o) return null;
+    return { e: edge, o, dir: Math.atan2(o.y - node.y, o.x - node.x) };
+  }
+  function bestEdge(node, p, limit) {
+    const ang = Math.atan2(p[1] - node.y, p[0] - node.x);
+    let best = null, bestOff = limit;
+    for (const e of doc.edges) {
+      if (e.a !== node.id && e.b !== node.id) continue;
+      const info = edgeAxis(node, e);
+      if (!info) continue;
+      const d = angDiff(ang, info.dir);
+      const off = Math.min(d, Math.abs(Math.PI - d));
+      if (off < bestOff) { bestOff = off; best = info; }
+    }
+    return best;
   }
   function norm(ev) {
     const r = canvas.getBoundingClientRect();
@@ -230,7 +266,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     paintFitted(ctx, preview, selectedEdge);
     el.querySelector('#draw-undo').disabled = !undo.length;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
-    ['pen', 'line', 'free', 'text', 'measure', 'area'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
     const bar = el.querySelector('#penBar');
     bar.classList.toggle('on', tool === 'pen');
     bar.querySelectorAll('[data-w]').forEach((b) => b.classList.toggle('on', Math.abs(+b.dataset.w - pen.width) < 1e-6));
@@ -339,7 +375,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     return null;
   }
   function hitEdge(p) {
-    let best = null, bd = radiusNorm();
+    let best = null, bd = px(28);
     for (const e of doc.edges) {
       const a = nodeById(doc, e.a), b = nodeById(doc, e.b);
       if (!a || !b) continue;
@@ -430,6 +466,31 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (angled) return { end: { x: angled.x, y: angled.y }, angled, mark: { x: angled.x, y: angled.y, kind: 'angle' } };
     return { end: { x, y }, angled: null, mark: null };
   }
+  function beginLengthDrag(act, info) {
+    if (!info || !act.grab) return;
+    const moving = act.grab;
+    act.tool = 'dragend';
+    act.edgeId = info.e.id;
+    act.nodeId = moving.id;
+    act.free = !!info.e.free;
+    act.fixed = { x: info.o.x, y: info.o.y, nodeId: info.o.id };
+    act.origin = Math.atan2(moving.y - info.o.y, moving.x - info.o.x);
+    act.x = act.x0;
+    act.y = act.y0;
+    act.moved = false;
+    act.pos = null;
+    selectedEdge = info.e.id;
+  }
+  function updateLengthDrag(act, p) {
+    if (cssDist(act.x0, act.y0, p[0], p[1]) > 12) act.moved = true;
+    if (!act.moved) return;
+    act.pos = constrainEndpoint(doc, { nodeId: act.nodeId, fixed: act.fixed, origin: act.origin, x: p[0], y: p[1], free: act.free, radius: px(28), lock: true });
+    const e = edgeById(doc, act.edgeId);
+    const len = Math.hypot(act.pos.x - act.fixed.x, act.pos.y - act.fixed.y);
+    msg = e?.measure ? `Maß bleibt ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'} · Länge ${fmtNum(len)}` : `Länge ${fmtNum(len)}`;
+    showSnap(act.pos.snap || null);
+    paint();
+  }
   canvas.addEventListener('pointerdown', (ev) => {
     if (ev.button != null && ev.button !== 0) return;
     ev.preventDefault();
@@ -451,25 +512,25 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       return;
     }
     const glyph = hitAngle(p);
-    if (glyph) { active = { tool: 'angle', nodeId: glyph.id }; return; }
-    const handle = hitHandle(p);
-    if (handle && tool !== 'pen' && tool !== 'measure' && tool !== 'text') {
-      const e = handle.edge;
-      const moving = nodeById(doc, handle.nodeId);
-      const fixed = nodeById(doc, e.a === handle.nodeId ? e.b : e.a);
-      active = {
-        tool: 'dragend', edgeId: e.id, nodeId: handle.nodeId, free: !!e.free,
-        fixed: { x: fixed.x, y: fixed.y, nodeId: fixed.id },
-        origin: Math.atan2(moving.y - fixed.y, moving.x - fixed.x),
-        x: p[0], y: p[1], moved: false, pos: null,
-      };
+    if (glyph && tool !== 'line' && tool !== 'free') { active = { tool: 'angle', nodeId: glyph.id }; return; }
+    if (tool === 'edit') {
+      const grab = nearestNode(p, 30);
+      const edge = hitEdge(p);
+      if (grab) {
+        active = { tool: 'editwait', grab, x0: p[0], y0: p[1], raw: [p[0], p[1]], hitEdge: edge?.id || null };
+        return;
+      }
+      selectedEdge = edge?.id || null;
+      selectedNode = null;
+      paint();
       return;
     }
     if (tool === 'pen') active = { tool: 'pen', points: [p] };
     else if (tool === 'line' || tool === 'free') {
+      const grab = nearestNode(p, 30);
       const snap = snapTarget(doc, p[0], p[1], radiusNorm());
       const start = snap || { x: p[0], y: p[1] };
-      active = { tool, start, end: start, angled: null, x0: p[0], y0: p[1], hitEdge: hitEdge(p)?.id || null };
+      active = { tool, start, end: start, angled: null, x0: p[0], y0: p[1], raw: [p[0], p[1]], grab, hitEdge: hitEdge(p)?.id || null, decided: null };
       showSnap(snap);
     } else if (tool === 'text') {
       selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
@@ -509,7 +570,18 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const last = active.points[active.points.length - 1];
       if (Math.hypot(p[0] - last[0], p[1] - last[1]) > 0.004) active.points.push(p);
       paint();
+    } else if (active.tool === 'editwait') {
+      active.raw = [p[0], p[1]];
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 12) beginLengthDrag(active, bestEdge(active.grab, p, Math.PI));
+      if (active.tool === 'dragend') updateLengthDrag(active, p);
     } else if (active.tool === 'line' || active.tool === 'free') {
+      active.raw = [p[0], p[1]];
+      if (!active.decided && active.grab && cssDist(active.x0, active.y0, p[0], p[1]) > 12) {
+        const info = bestEdge(active.grab, p, 24 * Math.PI / 180);
+        if (info) beginLengthDrag(active, info);
+        else active.decided = 'draw';
+      }
+      if (active.tool === 'dragend') { updateLengthDrag(active, p); return; }
       const placed = placeEnd(active.start, p[0], p[1], active.tool === 'free');
       active.end = placed.end;
       active.angled = placed.angled;
@@ -533,24 +605,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       if (Math.hypot(dx, dy) > 0.012) active.moved = true;
       if (active.moved) { active.dx = dx; active.dy = dy; paint(); }
     } else if (active.tool === 'dragend') {
-      if (Math.hypot(p[0] - active.x, p[1] - active.y) > 0.012) active.moved = true;
-      if (active.moved) {
-        active.pos = constrainEndpoint(doc, { nodeId: active.nodeId, fixed: active.fixed, origin: active.origin, x: p[0], y: p[1], free: active.free, radius: radiusNorm() });
-        const e = edgeById(doc, active.edgeId);
-        const len = Math.hypot(active.pos.x - active.fixed.x, active.pos.y - active.fixed.y);
-        msg = e?.measure ? `Maß bleibt ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'} · Länge ${fmtNum(len)}` : `Länge ${fmtNum(len)}`;
-        if (active.pos.snap) showSnap(active.pos.snap.kind ? active.pos.snap : { x: active.pos.x, y: active.pos.y });
-        else showSnap(null);
-        paint();
-      }
+      updateLengthDrag(active, p);
     }
   });
   const end = async () => {
     if (!active) return;
     const act = active; active = null; showSnap(null);
     if (act.tool === 'pen' && act.points.length >= 2) { doc.pen = pen; await commit(addStroke(doc, act.points, pen)); }
-    else if (act.tool === 'line' || act.tool === 'free') {
-      const moved = Math.hypot((act.end?.x ?? act.x0) - act.x0, (act.end?.y ?? act.y0) - act.y0) > 0.015;
+    else if (act.tool === 'editwait') {
+      if (cssDist(act.x0, act.y0, act.raw[0], act.raw[1]) <= 12) {
+        selectedEdge = act.hitEdge || doc.edges.find((e) => e.a === act.grab.id || e.b === act.grab.id)?.id || null;
+        paint();
+      }
+    } else if (act.tool === 'line' || act.tool === 'free') {
+      const moved = cssDist(act.x0, act.y0, act.raw[0], act.raw[1]) > 12;
       if (!moved) {
         selectedEdge = act.hitEdge || null;
         paint();
@@ -588,6 +656,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-pen').onclick = () => { tool = 'pen'; paint(); };
   el.querySelector('#draw-line').onclick = () => { tool = 'line'; paint(); };
   el.querySelector('#draw-free').onclick = () => { tool = 'free'; paint(); };
+  el.querySelector('#draw-edit').onclick = () => { tool = 'edit'; paint(); };
   el.querySelector('#draw-text').onclick = () => { tool = 'text'; paint(); };
   el.querySelector('#penBar').addEventListener('click', (ev) => {
     const b = ev.target.closest('button'); if (!b) return;
