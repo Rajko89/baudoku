@@ -1,5 +1,5 @@
 // PDF-Export (jsPDF, lokal gebündelt)
-import { fmtDate, fmtDateTime, fmtNum, fmtCoord, loadImg } from './util.js';
+import { fmtDate, fmtDateTime, fmtNum, fmtCoord, loadImg, HEADER_COLORS } from './util.js';
 import { drawToCanvas } from './media.js';
 import { renderAnnotated, fmtVal } from './measure.js';
 import { measureValue, realMapper } from './geom.js';
@@ -9,7 +9,17 @@ import { importLegacyStrokes, evaluateCycle, findCycles } from './plan.js';
 import { computeFace, formatCalcText, scaleWarning } from './sketch-calc.js';
 
 const M = 15, PW = 210, PH = 297, CW = PW - 2 * M;
-const ACC = [232, 89, 12], DARK = [31, 41, 51], GREY = [91, 102, 114];
+const ACC = [232, 89, 12], GREY = [91, 102, 114];
+function hexRgb(hex) {
+  const h = String(hex || '').replace('#', '');
+  const n = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  return [parseInt(n.slice(0, 2), 16), parseInt(n.slice(2, 4), 16), parseInt(n.slice(4, 6), 16)];
+}
+function relLum(rgb) {
+  const lin = (c) => { const x = c / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+  return 0.2126 * lin(rgb[0]) + 0.7152 * lin(rgb[1]) + 0.0722 * lin(rgb[2]);
+}
+function contrastWhite(rgb) { return 1.05 / (relLum(rgb) + 0.05); }
 
 async function jpeg(blob, max = 1600, q = 0.82, markup) {
   const img = await loadImg(blob);
@@ -21,13 +31,17 @@ async function jpeg(blob, max = 1600, q = 0.82, markup) {
 
 export async function buildPdf({ project, photos, notes, aufmass, sketches = [], sheets = [], settings, opts, progress = () => { } }) {
   const { jsPDF } = window.jspdf;
+  const chosen = HEADER_COLORS[settings?.header] || HEADER_COLORS.blue;
+  const HEAD = hexRgb(chosen.bg);
+  const HEAD_FG = hexRgb(chosen.fg);
+  const onWhite = contrastWhite(HEAD) >= 4.5 ? HEAD : HEAD_FG;
   const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
   doc.setProperties({ title: `Baudokumentation ${project.name}`, author: settings.bearbeiter || '', creator: 'Baudoku' });
   const photoNo = new Map(photos.map((p, i) => [p.id, i + 1]));
   let y = M;
   const newPage = () => { doc.addPage(); y = M; };
   const need = h => { if (y + h > PH - 18) newPage(); };
-  const h1 = t => { need(16); doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(...DARK); doc.text(t, M, y + 6); doc.setDrawColor(...ACC); doc.setLineWidth(0.8); doc.line(M, y + 9, M + CW, y + 9); y += 15; };
+  const h1 = t => { need(16); doc.setFont('helvetica', 'bold'); doc.setFontSize(16); doc.setTextColor(...onWhite); doc.text(t, M, y + 6); doc.setDrawColor(...ACC); doc.setLineWidth(0.8); doc.line(M, y + 9, M + CW, y + 9); y += 15; };
   const txt = (t, size = 10, style = 'normal', color = [20, 24, 29]) => {
     doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(...color);
     const lines = doc.splitTextToSize(String(t ?? ''), CW); const lh = size * 0.42;
@@ -35,14 +49,14 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
   };
 
   /* Deckblatt */
-  doc.setFillColor(...DARK); doc.rect(0, 0, PW, 52, 'F');
+  doc.setFillColor(...HEAD); doc.rect(0, 0, PW, 52, 'F');
   doc.setFillColor(...ACC); doc.rect(0, 52, PW, 2.5, 'F');
-  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
+  doc.setTextColor(...HEAD_FG); doc.setFont('helvetica', 'normal'); doc.setFontSize(11);
   doc.text(settings.firma || '', M, 18);
   doc.setFont('helvetica', 'bold'); doc.setFontSize(26); doc.text('Baudokumentation', M, 34);
   doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.text(opts.includeAufmass ? 'Fotodokumentation · Notizen · Aufmaß' : 'Fotodokumentation · Notizen', M, 44);
   y = 68;
-  doc.setTextColor(...DARK); doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
+  doc.setTextColor(...onWhite); doc.setFont('helvetica', 'bold'); doc.setFontSize(18);
   doc.splitTextToSize(project.name || 'Projekt', CW).forEach(l => { doc.text(l, M, y); y += 8; }); y += 4;
   const fields = [['Kunde', project.kunde], ['Adresse', project.adresse], ['Bauvorhaben-Nr.', project.bvnr], ['Datum', fmtDate(project.datum)], ['Bearbeiter', settings.bearbeiter], ['Erstellt am', fmtDateTime(Date.now())],
     ['Umfang', `${photos.length} Fotos · ${notes.length} Notizen · ${aufmass.length} Aufmaß-Positionen · ${sketches.length} Flächenskizzen · ${sheets.length} freie Skizzen`]];
@@ -95,7 +109,7 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
   if (opts.includeAufmass && aufmass.length) {
     newPage(); h1('Aufmaß');
     const C = [{ k: 'pos', t: 'Pos.', w: 16 }, { k: 'bez', t: 'Bezeichnung', w: 88 }, { k: 'menge', t: 'Menge', w: 28, r: true }, { k: 'einheit', t: 'Einheit', w: 16 }, { k: 'src', t: 'Quelle / Ansatz', w: CW - 148 }];
-    const head = () => { doc.setFillColor(...DARK); doc.rect(M, y, CW, 8, 'F'); doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); let x = M; C.forEach(c => { doc.text(c.t, c.r ? x + c.w - 2 : x + 2, y + 5.4, { align: c.r ? 'right' : 'left' }); x += c.w; }); y += 8; };
+    const head = () => { doc.setFillColor(...HEAD); doc.rect(M, y, CW, 8, 'F'); doc.setTextColor(...HEAD_FG); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5); let x = M; C.forEach(c => { doc.text(c.t, c.r ? x + c.w - 2 : x + 2, y + 5.4, { align: c.r ? 'right' : 'left' }); x += c.w; }); y += 8; };
     head();
     aufmass.forEach((r, i) => {
       const srcBits = [];

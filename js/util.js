@@ -1,4 +1,10 @@
 // Allgemeine Hilfsfunktionen: Formatierung (deutsch), Escape, Dialoge, Toast
+export const HEADER_COLORS = {
+  blue: { bg: '#1f2933', fg: '#ffffff', name: 'Blau' },
+  red: { bg: '#AA1C1C', fg: '#ffffff', name: 'Rot' },
+  green: { bg: '#1B5E20', fg: '#ffffff', name: 'Grün' },
+  yellow: { bg: '#FFAC27', fg: '#111111', name: 'Gelb' },
+};
 export const $ = (s, el = document) => el.querySelector(s);
 export const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 export const uid = () => (crypto.randomUUID ? crypto.randomUUID() : 'id-' + Date.now().toString(36) + Math.random().toString(36).slice(2));
