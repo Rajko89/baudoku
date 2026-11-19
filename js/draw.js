@@ -130,11 +130,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let msg = '';
   let formGen = 0;
   let view = { s: 1, ox: 0, oy: 0, iw: 1, ih: 1 };
+  let userZoom = 1;
+  const minZoom = blank ? 0.5 : 1;
+  const maxZoom = 6;
+  const pointers = new Map();
+  let hands = null;
+  let pinchRef = null;
+  let lastTapAt = 0;
+  let lastTapX = 0;
+  let lastTapY = 0;
   const title = sheet?.title || sketch?.title || 'Zeichnen';
   const el = document.createElement('div');
   el.className = 'draw';
   el.innerHTML = `<header class="hdr"><button type="button" class="ib" id="drawBack" aria-label="Zurück">←</button><h1 id="drawTitle"></h1></header>
-    <div id="drawStage"><canvas id="drawCanvas"></canvas><div id="snapMark" hidden></div></div>
+    <div id="drawStage"><canvas id="drawCanvas"></canvas><div id="snapMark" hidden></div><button type="button" id="drawZoom" hidden aria-label="Zoom zurücksetzen">1:1</button></div>
     <pre id="drawMsg"></pre>
     <form id="drawForm" hidden>
       <input id="drawInput" autocomplete="off">
@@ -178,10 +187,72 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const dpr = window.devicePixelRatio || 1;
     const bw = Math.max(2, Math.round(r.width * dpr));
     const bh = Math.max(2, Math.round(Math.max(r.height, 160) * dpr));
-    if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
-    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    const s = Math.min(canvas.width / iw, canvas.height / ih);
-    view = { s, ox: (canvas.width - iw * s) / 2, oy: (canvas.height - ih * s) / 2, iw, ih };
+    const iw = img.naturalWidth || img.width || 1, ih = img.naturalHeight || img.height || 1;
+    if (canvas.width === bw && canvas.height === bh && view.s0) return;
+    let nx = 0.5, ny = 0.5;
+    if (view.s0 && view.iw && view.s) {
+      nx = (canvas.width / 2 - view.ox) / (view.iw * view.s);
+      ny = (canvas.height / 2 - view.oy) / (view.ih * view.s);
+      if (!isFinite(nx)) nx = 0.5;
+      if (!isFinite(ny)) ny = 0.5;
+    }
+    canvas.width = bw;
+    canvas.height = bh;
+    const s0 = Math.min(bw / iw, bh / ih) || 1;
+    const s = s0 * userZoom;
+    view = { s, ox: bw / 2 - nx * iw * s, oy: bh / 2 - ny * ih * s, iw, ih, s0 };
+  }
+  function clampView() {
+    const r = canvas.getBoundingClientRect();
+    const margin = 48 * (canvas.width / (r.width || 1));
+    const right = view.ox + view.iw * view.s;
+    const bottom = view.oy + view.ih * view.s;
+    if (right < margin) view.ox += margin - right;
+    if (view.ox > canvas.width - margin) view.ox -= view.ox - (canvas.width - margin);
+    if (bottom < margin) view.oy += margin - bottom;
+    if (view.oy > canvas.height - margin) view.oy -= view.oy - (canvas.height - margin);
+  }
+  function resetZoom() {
+    userZoom = 1;
+    const s = view.s0 || view.s || 1;
+    view.s = s;
+    view.ox = (canvas.width - view.iw * s) / 2;
+    view.oy = (canvas.height - view.ih * s) / 2;
+    paint();
+  }
+  function beginPinch() {
+    active = null;
+    showSnap(null);
+    if (!form.hidden) { form.hidden = true; formGen++; }
+    hands = 'pinch';
+    const pts = [...pointers.values()];
+    if (pts.length >= 2) {
+      pinchRef = {
+        dist: Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1,
+        mid: { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 },
+      };
+    }
+    paint();
+  }
+  function pinchApply() {
+    const pts = [...pointers.values()];
+    if (pts.length < 2 || !pinchRef || !view.s0) return;
+    const dist = Math.hypot(pts[1].x - pts[0].x, pts[1].y - pts[0].y) || 1;
+    const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+    const factor = dist / pinchRef.dist;
+    const r = canvas.getBoundingClientRect();
+    const kx = canvas.width / (r.width || 1), ky = canvas.height / (r.height || 1);
+    const prevX = (pinchRef.mid.x - r.left) * kx;
+    const prevY = (pinchRef.mid.y - r.top) * ky;
+    const nx = (prevX - view.ox) / (view.iw * view.s);
+    const ny = (prevY - view.oy) / (view.ih * view.s);
+    userZoom = Math.min(maxZoom, Math.max(minZoom, userZoom * factor));
+    view.s = view.s0 * userZoom;
+    view.ox = (mid.x - r.left) * kx - nx * view.iw * view.s;
+    view.oy = (mid.y - r.top) * ky - ny * view.ih * view.s;
+    clampView();
+    pinchRef = { dist, mid };
+    paint();
   }
   function pxPerNorm() {
     const r = canvas.getBoundingClientRect();
@@ -265,6 +336,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     else if (active?.tool === 'text' && active.moved) preview = doc;
     paintFitted(ctx, preview, selectedEdge);
     el.querySelector('#draw-undo').disabled = !undo.length;
+    const zoomBtn = el.querySelector('#drawZoom');
+    if (zoomBtn) zoomBtn.hidden = Math.abs(userZoom - 1) < 0.02;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
     ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
     const bar = el.querySelector('#penBar');
@@ -296,38 +369,39 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     };
   }
   function paintFitted(ctx2, d, sel) {
+    const z = userZoom || 1;
     const X = (nx) => view.ox + nx * view.iw * view.s;
     const Y = (ny) => view.oy + ny * view.ih * view.s;
-    drawStrokes(ctx2, (d.strokes || []).map((s) => ({ points: s.points.map((p) => [X(p[0]) / canvas.width, Y(p[1]) / canvas.height]), width: s.width || 0.012, color: s.color })), canvas.width, canvas.height);
+    drawStrokes(ctx2, (d.strokes || []).map((s) => ({ points: s.points.map((p) => [X(p[0]) / canvas.width, Y(p[1]) / canvas.height]), width: (s.width || 0.012) * z, color: s.color })), canvas.width, canvas.height);
     for (const e of d.edges || []) {
       const a = nodeById(d, e.a), b = nodeById(d, e.b);
       if (!a || !b) continue;
       ctx2.beginPath(); ctx2.moveTo(X(a.x), Y(a.y)); ctx2.lineTo(X(b.x), Y(b.y));
       ctx2.strokeStyle = e.free ? '#7048e8' : (sel === e.id ? '#0b7285' : '#1f2933');
-      ctx2.lineWidth = sel === e.id ? 8 : 4;
-      ctx2.setLineDash(e.free ? [8, 6] : []);
+      ctx2.lineWidth = (sel === e.id ? 8 : 4) * z;
+      ctx2.setLineDash(e.free ? [8 * z, 6 * z] : []);
       ctx2.stroke();
       ctx2.setLineDash([]);
       const mx = (X(a.x) + X(b.x)) / 2, my = (Y(a.y) + Y(b.y)) / 2;
       const ang = readable(Math.atan2(Y(b.y) - Y(a.y), X(b.x) - X(a.x)));
       ctx2.save(); ctx2.translate(mx, my); ctx2.rotate(ang);
-      ctx2.font = '700 15px sans-serif'; ctx2.textAlign = 'center';
-      ctx2.lineWidth = 4; ctx2.strokeStyle = '#fff'; ctx2.strokeText(e.label || '', 0, -8); ctx2.fillStyle = '#1f2933'; ctx2.fillText(e.label || '', 0, -8);
+      ctx2.font = `700 ${15 * z}px sans-serif`; ctx2.textAlign = 'center';
+      ctx2.lineWidth = 4 * z; ctx2.strokeStyle = '#fff'; ctx2.strokeText(e.label || '', 0, -8 * z); ctx2.fillStyle = '#1f2933'; ctx2.fillText(e.label || '', 0, -8 * z);
       const note = ann.find((n) => n.id === e.id);
       if (e.measure && e.measure.source !== 'derived') {
         const m = `${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}`;
-        ctx2.strokeText(m, 0, 16); ctx2.fillStyle = MEASURE; ctx2.fillText(m, 0, 16);
+        ctx2.strokeText(m, 0, 16 * z); ctx2.fillStyle = MEASURE; ctx2.fillText(m, 0, 16 * z);
       } else if (note?.derived) {
-        ctx2.font = 'italic 15px sans-serif';
-        ctx2.strokeText('(' + note.text + ')', 0, 16); ctx2.fillStyle = '#868e96'; ctx2.fillText('(' + note.text + ')', 0, 16);
+        ctx2.font = `italic ${15 * z}px sans-serif`;
+        ctx2.strokeText('(' + note.text + ')', 0, 16 * z); ctx2.fillStyle = '#868e96'; ctx2.fillText('(' + note.text + ')', 0, 16 * z);
       }
       ctx2.restore();
     }
     for (const n of d.nodes || []) {
       const right = (d.rights || []).some((r) => r.node === n.id);
-      ctx2.beginPath(); ctx2.arc(X(n.x), Y(n.y), right ? 8 : 5, 0, 7);
-      ctx2.fillStyle = right ? '#2b8a3e' : '#fff'; ctx2.fill(); ctx2.lineWidth = 2; ctx2.strokeStyle = '#1f2933'; ctx2.stroke();
-      if (right) { ctx2.fillStyle = '#2b8a3e'; ctx2.font = '700 16px sans-serif'; ctx2.fillText('∟', X(n.x) + 8, Y(n.y) - 8); }
+      ctx2.beginPath(); ctx2.arc(X(n.x), Y(n.y), (right ? 8 : 5) * z, 0, 7);
+      ctx2.fillStyle = right ? '#2b8a3e' : '#fff'; ctx2.fill(); ctx2.lineWidth = 2 * z; ctx2.strokeStyle = '#1f2933'; ctx2.stroke();
+      if (right) { ctx2.fillStyle = '#2b8a3e'; ctx2.font = `700 ${16 * z}px sans-serif`; ctx2.fillText('∟', X(n.x) + 8 * z, Y(n.y) - 8 * z); }
     }
     const picked = (d.edges || []).find((e) => e.id === sel);
     if (picked) {
@@ -335,32 +409,32 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         const n = nodeById(d, id);
         if (!n) continue;
         ctx2.beginPath();
-        ctx2.arc(X(n.x), Y(n.y), 18, 0, 7);
+        ctx2.arc(X(n.x), Y(n.y), 18 * z, 0, 7);
         ctx2.fillStyle = '#fff';
         ctx2.fill();
-        ctx2.lineWidth = 4;
+        ctx2.lineWidth = 4 * z;
         ctx2.strokeStyle = '#0b7285';
         ctx2.stroke();
       }
     }
     for (const t of d.texts || []) {
-      ctx2.font = '700 18px sans-serif';
-      const tw = ctx2.measureText(t.text || '').width + 14;
-      ctx2.fillStyle = 'rgba(255,255,255,.94)'; ctx2.fillRect(X(t.x) - 6, Y(t.y) - 20, tw, 26);
+      ctx2.font = `700 ${18 * z}px sans-serif`;
+      const tw = ctx2.measureText(t.text || '').width + 14 * z;
+      ctx2.fillStyle = 'rgba(255,255,255,.94)'; ctx2.fillRect(X(t.x) - 6 * z, Y(t.y) - 20 * z, tw, 26 * z);
       ctx2.fillStyle = '#111'; ctx2.textAlign = 'left'; ctx2.fillText(t.text || '', X(t.x), Y(t.y));
     }
     ctx2.textAlign = 'center';
     for (const f of evaluateFaces(d)) {
-      ctx2.font = '700 16px sans-serif';
-      const tw = ctx2.measureText(f.text).width + 16;
+      ctx2.font = `700 ${16 * z}px sans-serif`;
+      const tw = ctx2.measureText(f.text).width + 16 * z;
       ctx2.fillStyle = 'rgba(255,255,255,.94)';
-      ctx2.fillRect(X(f.x) - tw / 2, Y(f.y) - 16, tw, 28);
+      ctx2.fillRect(X(f.x) - tw / 2, Y(f.y) - 16 * z, tw, 28 * z);
       ctx2.fillStyle = f.ok ? '#0b7285' : '#c92a2a';
-      ctx2.fillText(f.text, X(f.x), Y(f.y) + 5);
+      ctx2.fillText(f.text, X(f.x), Y(f.y) + 5 * z);
     }
     if (active?.tool === 'line' && active.angled?.right && active.start) {
-      ctx2.fillStyle = '#2b8a3e'; ctx2.font = '700 16px sans-serif'; ctx2.textAlign = 'left';
-      ctx2.fillText('∟', X(active.start.x) + 8, Y(active.start.y) - 8);
+      ctx2.fillStyle = '#2b8a3e'; ctx2.font = `700 ${16 * z}px sans-serif`; ctx2.textAlign = 'left';
+      ctx2.fillText('∟', X(active.start.x) + 8 * z, Y(active.start.y) - 8 * z);
     }
   }
   function hitHandle(p) {
@@ -495,6 +569,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (ev.button != null && ev.button !== 0) return;
     ev.preventDefault();
     try { canvas.setPointerCapture(ev.pointerId); } catch (e) { /* Test-Events */ }
+    pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pointers.size >= 2) { beginPinch(); return; }
+    if (hands === 'hold' || hands === 'pinch') return;
+    hands = 'draw';
     const p = norm(ev);
     const t = hitText(p);
     if (t) {
@@ -564,7 +642,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
   });
   canvas.addEventListener('pointermove', (ev) => {
-    if (!active) return;
+    if (pointers.has(ev.pointerId)) pointers.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (hands === 'pinch' || pointers.size >= 2) {
+      if (hands !== 'pinch') beginPinch();
+      else pinchApply();
+      return;
+    }
+    if (hands === 'hold' || !active) return;
     const p = norm(ev);
     if (active.tool === 'pen') {
       const last = active.points[active.points.length - 1];
@@ -650,8 +734,35 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     else if (act.tool === 'moveedge' && act.moved) { await commit(moveEdge(doc, act.id, act.dx, act.dy)); await refreshArea(); }
     else paint();
   };
-  canvas.addEventListener('pointerup', end);
-  canvas.addEventListener('pointercancel', end);
+  const release = async (ev) => {
+    pointers.delete(ev.pointerId);
+    if (hands === 'pinch' || hands === 'hold') {
+      if (pointers.size >= 2) return;
+      hands = pointers.size === 0 ? null : 'hold';
+      pinchRef = null;
+      active = null;
+      showSnap(null);
+      return;
+    }
+    if (pointers.size > 0) { beginPinch(); return; }
+    const tap = active?.raw && cssDist(active.x0, active.y0, active.raw[0], active.raw[1]) <= 12;
+    if (tap && Date.now() - lastTapAt < 340 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
+      active = null;
+      showSnap(null);
+      hands = null;
+      lastTapAt = 0;
+      resetZoom();
+      return;
+    }
+    if (tap) { lastTapAt = Date.now(); lastTapX = ev.clientX; lastTapY = ev.clientY; }
+    hands = null;
+    await end();
+  };
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('touchstart', (ev) => ev.preventDefault(), { passive: false });
+  canvas.addEventListener('touchmove', (ev) => ev.preventDefault(), { passive: false });
+  el.querySelector('#drawZoom').onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); resetZoom(); };
 
   el.querySelector('#draw-pen').onclick = () => { tool = 'pen'; paint(); };
   el.querySelector('#draw-line').onclick = () => { tool = 'line'; paint(); };
@@ -718,6 +829,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     rights: () => (doc.rights || []).length,
     selected: () => !!selectedEdge,
     pen: () => ({ ...pen }),
+    zoom: () => userZoom,
     clientPoint(nx, ny) {
       layout();
       const r = canvas.getBoundingClientRect();
