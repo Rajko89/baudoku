@@ -12,9 +12,21 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.6.4';
+const APP_VERSION = 'baudoku-v1.6.5';
 const APP = $('#app');
-const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true };
+const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
+const HEADER_COLORS = {
+  blue: { bg: '#1f2933', fg: '#ffffff', name: 'Blau' },
+  red: { bg: '#AA1C1C', fg: '#ffffff', name: 'Rot' },
+  green: { bg: '#1B5E20', fg: '#ffffff', name: 'Grün' },
+  yellow: { bg: '#FFAC27', fg: '#111111', name: 'Gelb' },
+};
+function applyHeader(id) {
+  const key = HEADER_COLORS[id] ? id : 'blue';
+  document.documentElement.dataset.header = key;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', HEADER_COLORS[key].bg);
+}
 const UNITS = ['m²', 'm', 'Stk', 'lfm', 'psch', 'h', 'm³', 'kg'];
 let cleanup = [];
 const urls = []; const url = b => { if (!b) return ''; const u = URL.createObjectURL(b); urls.push(u); return u; };
@@ -471,6 +483,7 @@ async function viewSettings() {
     <label class="chk"><input type="checkbox" name="stampFirma" ${s.stampFirma ? 'checked' : ''}> Firma im Fotostempel</label>
     <label class="chk"><input type="checkbox" name="geocode" ${s.geocode ? 'checked' : ''}> Adresse online ermitteln (OpenStreetMap)</label>
     <label class="chk"><input type="checkbox" name="pdfStamped" ${s.pdfStamped ? 'checked' : ''}> PDF standardmäßig mit Stempel</label>
+    <div class="f">Farbe Kopfleiste<div class="head-colors" id="headColors">${Object.entries(HEADER_COLORS).map(([id, c]) => `<button type="button" data-head="${id}" aria-pressed="${(s.header || 'blue') === id ? 'true' : 'false'}" style="background:${c.bg};color:${c.fg}">${c.name}</button>`).join('')}</div></div>
     <button class="btn primary block" type="submit">Speichern</button></form>
     <div class="card"><h3 style="margin:0 0 8px">Datensicherung</h3><p class="small">Alle Daten liegen nur auf diesem Gerät. Regelmäßig sichern!</p>
     <div class="grid2"><button class="btn" id="bakAll">💾 Alles sichern</button><button class="btn" id="imp">📥 Importieren</button></div>
@@ -479,8 +492,20 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.6.4 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
-  $('#sf').addEventListener('submit', async e => { e.preventDefault(); const f = e.target; await db.setSetting('app', { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked }); toast('Gespeichert'); });
+    <p class="small">Baudoku v1.6.5 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+  let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
+  const readForm = () => {
+    const f = $('#sf');
+    return { firma: f.firma.value.trim(), bearbeiter: f.bearbeiter.value.trim(), stampFirma: f.stampFirma.checked, geocode: f.geocode.checked, pdfStamped: f.pdfStamped.checked, header: headerId };
+  };
+  const paintSwatches = () => $$('#headColors button').forEach(b => { b.setAttribute('aria-pressed', b.dataset.head === headerId ? 'true' : 'false'); });
+  $$('#headColors button').forEach(b => b.onclick = async () => {
+    headerId = HEADER_COLORS[b.dataset.head] ? b.dataset.head : 'blue';
+    applyHeader(headerId);
+    paintSwatches();
+    await db.setSetting('app', readForm());
+  });
+  $('#sf').addEventListener('submit', async e => { e.preventDefault(); await db.setSetting('app', readForm()); toast('Gespeichert'); });
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');
     const b = $('#bakAll'); b.disabled = true; const out = $('#bakOut'); out.textContent = 'Backup wird erstellt …';
@@ -570,4 +595,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
     });
   }).catch(e => console.warn('SW', e));
 }
-route();
+settings().then((s) => applyHeader(s.header)).catch(() => {}).finally(() => route());
