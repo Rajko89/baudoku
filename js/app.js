@@ -1,6 +1,6 @@
 // Baudoku – Hauptanwendung (Views, Router)
 import * as db from './db.js';
-import { $, $$, esc, uid, fmtDate, fmtDateTime, fmtNum, fmtCoord, fmtBytes, isoDate, parseNum, toast, modal, confirmDlg, loadImg, canvasToBlob, downloadBlob, shareOrDownload, safeName } from './util.js';
+import { $, $$, esc, uid, fmtDate, fmtDateTime, fmtNum, fmtCoord, fmtBytes, isoDate, parseNum, toast, modal, confirmDlg, loadImg, canvasToBlob, downloadBlob, shareOrDownload, safeName, HEADER_COLORS } from './util.js';
 import { startGeo, stopGeo, getFix, onGeo, geoState, reverseGeocode, processImage, liveCamera } from './media.js';
 import { readExif } from './exif.js';
 import { emptyMeasure, measureValue } from './geom.js';
@@ -12,15 +12,9 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.6.5';
+const APP_VERSION = 'baudoku-v1.6.6';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: 'Ruben Bleckmann', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
-const HEADER_COLORS = {
-  blue: { bg: '#1f2933', fg: '#ffffff', name: 'Blau' },
-  red: { bg: '#AA1C1C', fg: '#ffffff', name: 'Rot' },
-  green: { bg: '#1B5E20', fg: '#ffffff', name: 'Grün' },
-  yellow: { bg: '#FFAC27', fg: '#111111', name: 'Gelb' },
-};
 function applyHeader(id) {
   const key = HEADER_COLORS[id] ? id : 'blue';
   document.documentElement.dataset.header = key;
@@ -359,7 +353,8 @@ async function viewProject(pid, tab, q) {
       const b = $('#mkPdf'); b.disabled = true; const out = $('#pdfOut'); out.textContent = 'PDF wird erstellt …';
       try {
         const opts = { includePhotos: $('#oPh').checked, stamped: $('#oSt').checked, includeNotes: $('#oNo').checked, includeAufmass: $('#oAm').checked, includeMeasureImgs: $('#oMi').checked, includeSketches: $('#oSk').checked, includeSheets: $('#oSheet').checked };
-        const blob = await buildPdf({ project: p, photos, notes, aufmass: am, sketches, sheets, settings: s, opts, progress: t => out.textContent = 'PDF wird erstellt … ' + t });
+        const fresh = await settings();
+        const blob = await buildPdf({ project: p, photos, notes, aufmass: am, sketches, sheets, settings: fresh, opts, progress: t => out.textContent = 'PDF wird erstellt … ' + t });
         const name = `Baudoku_${safeName(p.name)}_${isoDate()}.pdf`;
         window.__baudoku.lastPdf = blob;
         showFileActions(out, blob, name, `Baudokumentation ${p.name}`);
@@ -492,7 +487,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.6.5 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku v1.6.6 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
     const f = $('#sf');
