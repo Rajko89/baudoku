@@ -54,10 +54,11 @@ export function drawToCanvas(img, max) {
 export function stampLines(meta) {
   const lines = [];
   lines.push({ t: [meta.projectName, meta.firma].filter(Boolean).join('  ·  '), bold: true });
-  lines.push({ t: 'Aufnahme: ' + fmtDateTime(meta.time, true) + (meta.source === 'gallery' ? ' (Bilddatum)' : '') });
-  if (meta.lat != null) lines.push({ t: 'GPS: ' + fmtCoord(meta.lat, meta.lon) + (meta.acc != null ? `  (±${fmtNum(meta.acc, 0)} m)` : '') });
-  else lines.push({ t: 'GPS: nicht verfügbar' });
-  if (meta.address) lines.push({ t: meta.address });
+  const kind = meta.timeKind === 'import' ? ' (Importzeit)' : meta.timeKind === 'exif' ? ' (Bilddatum)' : '';
+  lines.push({ t: 'Aufnahme: ' + fmtDateTime(meta.time, true) + kind });
+  if (meta.address) lines.push({ t: 'Ort: ' + meta.address });
+  else if (meta.lat != null) lines.push({ t: 'Ort: ' + fmtCoord(meta.lat, meta.lon) + (meta.acc != null ? `  (±${fmtNum(meta.acc, 0)} m)` : '') });
+  else lines.push({ t: 'Ort nicht verfügbar' });
   return lines;
 }
 /** Stempel ins Bild brennen */

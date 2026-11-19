@@ -416,9 +416,12 @@ try {
   await gesture([await pt(0.2, 0.8), await pt(0.8, 0.2)]);
   const end = await pt(0.23, 0.17);
   const cross = await pt(0.52, 0.48);
+  const offLine = await pt(0.35, 0.12);
   await canvas.dispatchEvent('pointerdown', { clientX: end.x, clientY: end.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
   await page.waitForSelector('#snapMark:not([hidden])');
   await page.screenshot({ path: join(art, 'baudoku-snap-endpunkt.png') });
+  await canvas.dispatchEvent('pointerup', { clientX: end.x, clientY: end.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+  await canvas.dispatchEvent('pointerdown', { clientX: offLine.x, clientY: offLine.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
   await canvas.dispatchEvent('pointermove', { clientX: cross.x, clientY: cross.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
   await page.waitForSelector('#snapMark:not([hidden])');
   await page.screenshot({ path: join(art, 'baudoku-snap.png') });

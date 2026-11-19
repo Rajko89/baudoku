@@ -196,6 +196,18 @@ test('zwei Flächen und fehlendes Maß in den Vorschlägen', () => {
   assert.ok(Math.abs(nodeById(moved, a.a).y - 0.05) < 1e-6);
 });
 
+test('kollineare zweite Linie verkürzt die bestehende', () => {
+  let d = emptyDoc();
+  d = line(d, 0.1, 0.5, 0.8, 0.5);
+  const end = d.nodes.find((n) => n.x > 0.7);
+  d = setMeasure(d, edge(d, 'a').id, 6, 'm');
+  d = addLine(d, { x: end.x, y: end.y, nodeId: end.id }, { x: 0.45, y: 0.5 });
+  assert.equal(d.edges.length, 1);
+  assert.equal(d.edges[0].measure.value, 6);
+  const xs = d.nodes.map((n) => n.x).sort((a, b) => a - b);
+  assert.ok(Math.abs(xs[1] - 0.45) < 0.03, xs.join(','));
+});
+
 test('Endpunkt ziehen ändert die Länge, nicht das Maß', () => {
   let d = emptyDoc();
   d = line(d, 0.2, 0.4, 0.6, 0.4);

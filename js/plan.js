@@ -94,16 +94,52 @@ function addRight(d, node, e1, e2) {
   if (d.rights.some((r) => r.node === node && [r.e1, r.e2].sort().join('|') === key)) return;
   d.rights.push({ id: nid(d, 'r'), node, e1, e2, fromSnap: true });
 }
+function lineDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+  return Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+}
+function absorbCollinear(doc, aId, bId) {
+  const pa = nodeById(doc, aId), pb = nodeById(doc, bId);
+  if (!pa || !pb) return false;
+  for (const e of doc.edges) {
+    const ea = nodeById(doc, e.a), eb = nodeById(doc, e.b);
+    if (!ea || !eb || Math.hypot(eb.x - ea.x, eb.y - ea.y) < 0.01) continue;
+    if (lineDist(pa, ea, eb) > 0.02 || lineDist(pb, ea, eb) > 0.02) continue;
+    const dx = eb.x - ea.x, dy = eb.y - ea.y, l2 = dx * dx + dy * dy || 1;
+    const project = (p) => ((p.x - ea.x) * dx + (p.y - ea.y) * dy) / l2;
+    const lo = Math.min(project(pa), project(pb)), hi = Math.max(project(pa), project(pb));
+    const overlap = Math.min(hi, 1) - Math.max(lo, 0);
+    const grab = aId === e.a || aId === e.b ? aId : bId === e.a || bId === e.b ? bId : null;
+    const extendsEnd = !!grab && (lo < -0.02 || hi > 1.02 || overlap > 0.02);
+    if (!extendsEnd && overlap < 0.05) continue;
+    if (!grab) {
+      for (const id of [aId, bId]) {
+        if (!doc.edges.some((ed) => ed.a === id || ed.b === id)) doc.nodes = doc.nodes.filter((n) => n.id !== id);
+      }
+      return true;
+    }
+    const destId = grab === aId ? bId : aId;
+    const dest = nodeById(doc, destId), g = nodeById(doc, grab);
+    if (!dest || !g) continue;
+    g.x = dest.x; g.y = dest.y;
+    if (destId !== e.a && destId !== e.b && !doc.edges.some((ed) => ed.a === destId || ed.b === destId)) {
+      doc.nodes = doc.nodes.filter((n) => n.id !== destId);
+    }
+    return true;
+  }
+  return false;
+}
 export function addLine(doc, start, end, opts = {}) {
   const d = clone(doc);
   const a = place(d, start);
   const b = place(d, end);
-  if (a !== b && !d.edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) {
-    const id = nid(d, 'e');
-    d.edges.push({ id, a, b, label: nextEdgeLabel(d), measure: null, free: !!opts.free });
-    d.seq = [...(d.seq || []), { type: 'edge', id }];
-    if (!opts.free) for (const r of opts.rights || []) addRight(d, r.nodeId, id, r.edgeId);
-  }
+  if (a === b) return d;
+  if (d.edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) return d;
+  if (absorbCollinear(d, a, b)) return d;
+  const id = nid(d, 'e');
+  d.edges.push({ id, a, b, label: nextEdgeLabel(d), measure: null, free: !!opts.free });
+  d.seq = [...(d.seq || []), { type: 'edge', id }];
+  if (!opts.free) for (const r of opts.rights || []) addRight(d, r.nodeId, id, r.edgeId);
   return d;
 }
 export function addStroke(doc, points, style = {}) {
@@ -551,7 +587,7 @@ export function moveNode(doc, id, x, y) {
   return d;
 }
 function clamp01(v) { return Math.max(0, Math.min(1, v)); }
-export function constrainEndpoint(doc, { nodeId, fixed, origin, x, y, free, radius }) {
+export function constrainEndpoint(doc, { nodeId, fixed, origin, x, y, free, radius, lock }) {
   let snap = snapTarget(doc, x, y, radius, nodeId);
   if (snap?.kind === 'node' && snap.nodeId === fixed.nodeId) snap = null;
   if (snap) return { x: snap.x, y: snap.y, snap };
@@ -559,7 +595,7 @@ export function constrainEndpoint(doc, { nodeId, fixed, origin, x, y, free, radi
   const ang = Math.atan2(y - fixed.y, x - fixed.x);
   const delta = Math.abs(wrapPi(ang - origin));
   const along = delta <= ANGLE_TOL || Math.abs(delta - Math.PI) <= ANGLE_TOL;
-  if (!along) {
+  if (!free && !lock && !along) {
     const turned = angleSnap(doc, { x: fixed.x, y: fixed.y, nodeId: fixed.nodeId }, x, y);
     if (turned) return { x: clamp01(turned.x), y: clamp01(turned.y), snap: { x: turned.x, y: turned.y, kind: 'angle' }, right: turned.right };
   }
