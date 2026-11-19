@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -194,6 +194,30 @@ test('zwei Flächen und fehlendes Maß in den Vorschlägen', () => {
   const moved = moveEdge(d, edge(d, 'a').id, 0, 0.05);
   const a = moved.edges.find((e) => e.label === 'a');
   assert.ok(Math.abs(nodeById(moved, a.a).y - 0.05) < 1e-6);
+});
+
+test('Endpunkt ziehen ändert die Länge, nicht das Maß', () => {
+  let d = emptyDoc();
+  d = line(d, 0.2, 0.4, 0.6, 0.4);
+  d = setMeasure(d, edge(d, 'a').id, 8, 'm');
+  const moving = d.nodes.find((n) => Math.abs(n.x - 0.6) < 1e-6);
+  const fixed = d.nodes.find((n) => Math.abs(n.x - 0.2) < 1e-6);
+  const pos = constrainEndpoint(d, { nodeId: moving.id, fixed: { x: fixed.x, y: fixed.y, nodeId: fixed.id }, origin: 0, x: 0.86, y: 0.45, free: false, radius: 0.02 });
+  assert.ok(Math.abs(pos.y - 0.4) < 1e-6, JSON.stringify(pos));
+  assert.ok(pos.x > 0.8, pos.x);
+  d = placeEndpoint(d, moving.id, pos);
+  assert.equal(edge(d, 'a').measure.value, 8);
+  assert.equal(edge(d, 'a').measure.unit, 'm');
+  const freePos = constrainEndpoint(d, { nodeId: moving.id, fixed: { x: fixed.x, y: fixed.y, nodeId: fixed.id }, origin: 0, x: 0.7, y: 0.7, free: true, radius: 0.02 });
+  assert.ok(freePos.y > 0.6);
+  let box = rect();
+  const corner = box.nodes[1];
+  const shared = box.edges.filter((e) => e.a === corner.id || e.b === corner.id).length;
+  box = moveNode(box, corner.id, corner.x + 0.1, corner.y);
+  assert.equal(box.edges.filter((e) => e.a === corner.id || e.b === corner.id).length, shared);
+  const gone = deleteEdge(d, edge(d, 'a').id);
+  assert.equal(gone.edges.length, 0);
+  assert.equal(gone.nodes.length, 0);
 });
 
 test('Trapez nur mit festgelegter Parallelität', () => {

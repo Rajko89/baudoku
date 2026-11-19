@@ -5,6 +5,7 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, toggleRight, setParallel,
   snapTarget, cycleAt, evaluateCycle, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
+  constrainEndpoint, placeEndpoint, deleteEdge,
 } from './plan.js';
 
 const INK = '#e8590c';
@@ -220,6 +221,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     else if ((active?.tool === 'line' || active?.tool === 'free') && active.end) preview = addLine(doc, active.start, active.end, { free: active.tool === 'free' });
     else if (active?.tool === 'moveedge' && active.moved) preview = moveEdge(doc, active.id, active.dx, active.dy);
     else if (active?.tool === 'movenode' && active.moved) preview = moveNode(doc, active.id, active.nx, active.ny);
+    else if (active?.tool === 'dragend' && active.pos) preview = moveNode(doc, active.nodeId, active.pos.x, active.pos.y);
     else if (active?.tool === 'face' && active.moved) {
       const base = (doc.faceOffsets || []).find((f) => f.sig === active.sig) || { dx: 0, dy: 0 };
       preview = setFaceOffset(doc, active.sig, (base.dx || 0) + active.dx, (base.dy || 0) + active.dy);
@@ -237,7 +239,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
-      selectedEdge ? '<button type="button" id="btn-parallel" class="btn">parallel zu anderer Kante</button>' : '',
+      selectedEdge ? '<button type="button" id="btn-parallel" class="btn">parallel zu anderer Kante</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
     ].join('');
     const right = el.querySelector('#btn-right');
     if (right) right.onclick = async () => {
@@ -248,6 +250,14 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     };
     const par = el.querySelector('#btn-parallel');
     if (par) par.onclick = () => { arm = selectedEdge; msg = 'Jetzt die zweite, parallele Kante antippen.'; paint(); };
+    const delLine = el.querySelector('#btn-del-line');
+    if (delLine) delLine.onclick = async () => {
+      const id = selectedEdge;
+      if (!id) return;
+      selectedEdge = null;
+      await commit(deleteEdge(doc, id));
+      await refreshArea();
+    };
   }
   function paintFitted(ctx2, d, sel) {
     const X = (nx) => view.ox + nx * view.iw * view.s;
@@ -283,6 +293,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.fillStyle = right ? '#2b8a3e' : '#fff'; ctx2.fill(); ctx2.lineWidth = 2; ctx2.strokeStyle = '#1f2933'; ctx2.stroke();
       if (right) { ctx2.fillStyle = '#2b8a3e'; ctx2.font = '700 16px sans-serif'; ctx2.fillText('∟', X(n.x) + 8, Y(n.y) - 8); }
     }
+    const picked = (d.edges || []).find((e) => e.id === sel);
+    if (picked) {
+      for (const id of [picked.a, picked.b]) {
+        const n = nodeById(d, id);
+        if (!n) continue;
+        ctx2.beginPath();
+        ctx2.arc(X(n.x), Y(n.y), 18, 0, 7);
+        ctx2.fillStyle = '#fff';
+        ctx2.fill();
+        ctx2.lineWidth = 4;
+        ctx2.strokeStyle = '#0b7285';
+        ctx2.stroke();
+      }
+    }
     for (const t of d.texts || []) {
       ctx2.font = '700 18px sans-serif';
       const tw = ctx2.measureText(t.text || '').width + 14;
@@ -302,6 +326,17 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.fillStyle = '#2b8a3e'; ctx2.font = '700 16px sans-serif'; ctx2.textAlign = 'left';
       ctx2.fillText('∟', X(active.start.x) + 8, Y(active.start.y) - 8);
     }
+  }
+  function hitHandle(p) {
+    if (!selectedEdge) return null;
+    const e = edgeById(doc, selectedEdge);
+    if (!e) return null;
+    const r = radiusNorm() * 1.8;
+    for (const end of ['a', 'b']) {
+      const n = nodeById(doc, e[end]);
+      if (n && Math.hypot(n.x - p[0], n.y - p[1]) <= r) return { nodeId: n.id, end, edge: e };
+    }
+    return null;
   }
   function hitEdge(p) {
     let best = null, bd = radiusNorm();
@@ -417,11 +452,24 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     const glyph = hitAngle(p);
     if (glyph) { active = { tool: 'angle', nodeId: glyph.id }; return; }
+    const handle = hitHandle(p);
+    if (handle && tool !== 'pen' && tool !== 'measure' && tool !== 'text') {
+      const e = handle.edge;
+      const moving = nodeById(doc, handle.nodeId);
+      const fixed = nodeById(doc, e.a === handle.nodeId ? e.b : e.a);
+      active = {
+        tool: 'dragend', edgeId: e.id, nodeId: handle.nodeId, free: !!e.free,
+        fixed: { x: fixed.x, y: fixed.y, nodeId: fixed.id },
+        origin: Math.atan2(moving.y - fixed.y, moving.x - fixed.x),
+        x: p[0], y: p[1], moved: false, pos: null,
+      };
+      return;
+    }
     if (tool === 'pen') active = { tool: 'pen', points: [p] };
     else if (tool === 'line' || tool === 'free') {
       const snap = snapTarget(doc, p[0], p[1], radiusNorm());
       const start = snap || { x: p[0], y: p[1] };
-      active = { tool, start, end: start, angled: null };
+      active = { tool, start, end: start, angled: null, x0: p[0], y0: p[1], hitEdge: hitEdge(p)?.id || null };
       showSnap(snap);
     } else if (tool === 'text') {
       selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
@@ -484,6 +532,17 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const dx = p[0] - active.x, dy = p[1] - active.y;
       if (Math.hypot(dx, dy) > 0.012) active.moved = true;
       if (active.moved) { active.dx = dx; active.dy = dy; paint(); }
+    } else if (active.tool === 'dragend') {
+      if (Math.hypot(p[0] - active.x, p[1] - active.y) > 0.012) active.moved = true;
+      if (active.moved) {
+        active.pos = constrainEndpoint(doc, { nodeId: active.nodeId, fixed: active.fixed, origin: active.origin, x: p[0], y: p[1], free: active.free, radius: radiusNorm() });
+        const e = edgeById(doc, active.edgeId);
+        const len = Math.hypot(active.pos.x - active.fixed.x, active.pos.y - active.fixed.y);
+        msg = e?.measure ? `Maß bleibt ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'} · Länge ${fmtNum(len)}` : `Länge ${fmtNum(len)}`;
+        if (active.pos.snap) showSnap(active.pos.snap.kind ? active.pos.snap : { x: active.pos.x, y: active.pos.y });
+        else showSnap(null);
+        paint();
+      }
     }
   });
   const end = async () => {
@@ -491,6 +550,12 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const act = active; active = null; showSnap(null);
     if (act.tool === 'pen' && act.points.length >= 2) { doc.pen = pen; await commit(addStroke(doc, act.points, pen)); }
     else if (act.tool === 'line' || act.tool === 'free') {
+      const moved = Math.hypot((act.end?.x ?? act.x0) - act.x0, (act.end?.y ?? act.y0) - act.y0) > 0.015;
+      if (!moved) {
+        selectedEdge = act.hitEdge || null;
+        paint();
+        return;
+      }
       const rights = act.tool === 'line' ? rightAtJoin(doc, act.start, act.end) : [];
       if (act.angled?.right) rights.push(act.angled.right);
       const next = addLine(doc, act.start, act.end, { free: act.tool === 'free', rights });
@@ -509,6 +574,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     else if (act.tool === 'angle') {
       const res = toggleRight(doc, act.nodeId);
       if (!res.error) { await commit(res.doc); await refreshArea(); }
+    } else if (act.tool === 'dragend' && act.moved && act.pos) {
+      await commit(placeEndpoint(doc, act.nodeId, act.pos));
+      selectedEdge = edgeById(doc, act.edgeId) ? act.edgeId : null;
+      await refreshArea();
     } else if (act.tool === 'movenode' && act.moved) { await commit(moveNode(doc, act.id, act.nx, act.ny)); await refreshArea(); }
     else if (act.tool === 'moveedge' && act.moved) { await commit(moveEdge(doc, act.id, act.dx, act.dy)); await refreshArea(); }
     else paint();
@@ -573,11 +642,12 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       });
     },
     edges: () => doc.edges.length,
-    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free }; }),
+    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null }; }),
     nodes: () => doc.nodes.length,
     texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y })),
     faces: () => evaluateFaces(doc).map((f) => ({ text: f.text, x: f.x, y: f.y, ok: f.ok, free: f.free })),
     rights: () => (doc.rights || []).length,
+    selected: () => !!selectedEdge,
     pen: () => ({ ...pen }),
     clientPoint(nx, ny) {
       layout();

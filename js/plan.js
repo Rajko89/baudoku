@@ -37,10 +37,13 @@ function segIntersect(p, q, r, s) {
   return { x: p.x + t * rx, y: p.y + t * ry };
 }
 
-export function snapTarget(doc, x, y, radius) {
+export function snapTarget(doc, x, y, radius, ignoreNodeId) {
   let best = null;
   const consider = (cand, d) => { if (d <= radius && (!best || d < best.d)) best = { ...cand, d }; };
-  for (const n of doc.nodes) consider({ x: n.x, y: n.y, kind: 'node', nodeId: n.id }, Math.hypot(n.x - x, n.y - y));
+  for (const n of doc.nodes) {
+    if (n.id === ignoreNodeId) continue;
+    consider({ x: n.x, y: n.y, kind: 'node', nodeId: n.id }, Math.hypot(n.x - x, n.y - y));
+  }
   const edges = doc.edges.map((e) => ({ e, a: nodeById(doc, e.a), b: nodeById(doc, e.b) })).filter((x0) => x0.a && x0.b);
   for (let i = 0; i < edges.length; i++) for (let j = i + 1; j < edges.length; j++) {
     const hit = segIntersect(edges[i].a, edges[i].b, edges[j].a, edges[j].b);
@@ -545,6 +548,56 @@ export function moveNode(doc, id, x, y) {
   const d = clone(doc);
   const n = nodeById(d, id);
   if (n) { n.x = Math.max(0, Math.min(1, x)); n.y = Math.max(0, Math.min(1, y)); }
+  return d;
+}
+function clamp01(v) { return Math.max(0, Math.min(1, v)); }
+export function constrainEndpoint(doc, { nodeId, fixed, origin, x, y, free, radius }) {
+  let snap = snapTarget(doc, x, y, radius, nodeId);
+  if (snap?.kind === 'node' && snap.nodeId === fixed.nodeId) snap = null;
+  if (snap) return { x: snap.x, y: snap.y, snap };
+  if (free) return { x: clamp01(x), y: clamp01(y), snap: null };
+  const ang = Math.atan2(y - fixed.y, x - fixed.x);
+  const delta = Math.abs(wrapPi(ang - origin));
+  const along = delta <= ANGLE_TOL || Math.abs(delta - Math.PI) <= ANGLE_TOL;
+  if (!along) {
+    const turned = angleSnap(doc, { x: fixed.x, y: fixed.y, nodeId: fixed.nodeId }, x, y);
+    if (turned) return { x: clamp01(turned.x), y: clamp01(turned.y), snap: { x: turned.x, y: turned.y, kind: 'angle' }, right: turned.right };
+  }
+  const dx = Math.cos(origin), dy = Math.sin(origin);
+  let t = (x - fixed.x) * dx + (y - fixed.y) * dy;
+  if (Math.abs(t) < 0.02) t = t < 0 ? -0.02 : 0.02;
+  return { x: clamp01(fixed.x + dx * t), y: clamp01(fixed.y + dy * t), snap: null };
+}
+export function placeEndpoint(doc, nodeId, pos) {
+  if (pos.snap?.kind === 'node' && pos.snap.nodeId && pos.snap.nodeId !== nodeId) {
+    const d = clone(doc);
+    const fromId = nodeId, toId = pos.snap.nodeId;
+    if (!nodeById(d, fromId) || !nodeById(d, toId)) return d;
+    for (const e of d.edges) {
+      if (e.a === fromId) e.a = toId;
+      if (e.b === fromId) e.b = toId;
+    }
+    d.edges = d.edges.filter((e) => e.a !== e.b);
+    const liveE = new Set(d.edges.map((e) => e.id));
+    d.rights = (d.rights || []).filter((r) => liveE.has(r.e1) && liveE.has(r.e2)).map((r) => (r.node === fromId ? { ...r, node: toId } : r));
+    d.parallels = (d.parallels || []).filter((p) => liveE.has(p.e1) && liveE.has(p.e2));
+    d.seq = (d.seq || []).filter((s) => s.type !== 'edge' || liveE.has(s.id));
+    if (!d.edges.some((e) => e.a === fromId || e.b === fromId)) d.nodes = d.nodes.filter((n) => n.id !== fromId);
+    return d;
+  }
+  return moveNode(doc, nodeId, pos.x, pos.y);
+}
+export function deleteEdge(doc, edgeId) {
+  const d = clone(doc);
+  if (!edgeById(d, edgeId)) return d;
+  d.edges = d.edges.filter((e) => e.id !== edgeId);
+  const liveE = new Set(d.edges.map((e) => e.id));
+  const liveN = new Set();
+  d.edges.forEach((e) => { liveN.add(e.a); liveN.add(e.b); });
+  d.nodes = d.nodes.filter((n) => liveN.has(n.id));
+  d.rights = (d.rights || []).filter((r) => liveE.has(r.e1) && liveE.has(r.e2) && liveN.has(r.node));
+  d.parallels = (d.parallels || []).filter((p) => liveE.has(p.e1) && liveE.has(p.e2));
+  d.seq = (d.seq || []).filter((s) => s.type !== 'edge' || liveE.has(s.id));
   return d;
 }
 export function moveEdge(doc, edgeId, dx, dy) {

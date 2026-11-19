@@ -202,6 +202,66 @@ try {
     await measure(0.7, 0.45, '50', 'cm');
     await page.waitForFunction(() => (window.__baudoku.draw.faces()[0]?.text || '').includes('0,50'));
 
+    await sheet('Korrigieren');
+    await page.locator('#draw-line').click();
+    await gesture([await at(0.2, 0.35), await at(0.55, 0.35)]);
+    await gesture([await at(0.37, 0.35)]);
+    await page.waitForFunction(() => window.__baudoku.draw.selected());
+    if (tag === 'phone') await page.screenshot({ path: join(art, 'baudoku-linie-griffe.png') });
+    const end0 = await page.evaluate(() => window.__baudoku.draw.edgeEnds()[0]);
+    await gesture([await at(end0.x2, end0.y2), await at(Math.min(0.92, end0.x2 + 0.2), end0.y2 + 0.01)]);
+    const end1 = await page.evaluate(() => window.__baudoku.draw.edgeEnds()[0]);
+    assert.ok(end1.x2 > end0.x2 + 0.08, JSON.stringify({ end0, end1 }));
+    assert.ok(Math.abs(end1.y1 - end1.y2) < 0.04, JSON.stringify(end1));
+    await page.locator('#draw-undo').click();
+    await page.waitForFunction((x) => Math.abs(window.__baudoku.draw.edgeEnds()[0].x2 - x) < 0.04, end0.x2);
+    await measure(0.35, 0.35, '4');
+    await page.locator('#draw-line').click();
+    const measured = await page.evaluate(() => window.__baudoku.draw.edgeEnds()[0]);
+    const grip = await at(measured.x2, measured.y2);
+    const gripTo = await at(Math.min(0.92, measured.x2 + 0.12), measured.y2);
+    const canvas = page.locator('#drawCanvas');
+    await canvas.dispatchEvent('pointerdown', { clientX: grip.x, clientY: grip.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await canvas.dispatchEvent('pointermove', { clientX: gripTo.x, clientY: gripTo.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 1 });
+    await page.waitForFunction(() => /Maß bleibt/.test(document.querySelector('#drawMsg')?.textContent || '') && /Länge/.test(document.querySelector('#drawMsg')?.textContent || ''));
+    await canvas.dispatchEvent('pointerup', { clientX: gripTo.x, clientY: gripTo.y, pointerId: 1, pointerType: 'touch', bubbles: true, button: 0, buttons: 0 });
+    const keptLen = await page.evaluate(() => window.__baudoku.draw.edgeEnds()[0]);
+    assert.equal(keptLen.m, 4);
+    assert.equal(keptLen.unit, 'm');
+    await page.locator('#btn-del-line').click();
+    await page.waitForFunction(() => window.__baudoku.draw.edges() === 0);
+    await page.locator('#draw-undo').click();
+    await page.waitForFunction(() => window.__baudoku.draw.edges() === 1 && window.__baudoku.draw.edgeEnds()[0].m === 4);
+
+    await sheet('Ziehen');
+    const box2 = [[0.22, 0.28], [0.7, 0.28], [0.7, 0.58], [0.22, 0.58]];
+    await poly(box2, '#draw-line');
+    await measure(0.46, 0.28, '8,50');
+    await measure(0.7, 0.43, '4,20');
+    await page.waitForFunction(() => (window.__baudoku.draw.faces()[0]?.text || '').includes('35,70'));
+    await page.locator('#draw-line').click();
+    await gesture([await at(0.46, 0.28)]);
+    await page.waitForFunction(() => window.__baudoku.draw.selected());
+    const top = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a'));
+    const side = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.label === 'b'));
+    await gesture([await at(top.x2, top.y2), await at(Math.min(0.9, top.x2 + 0.12), top.y2)]);
+    const moved = await page.evaluate(() => ({ a: window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a'), b: window.__baudoku.draw.edgeEnds().find((e) => e.label === 'b'), face: window.__baudoku.draw.faces()[0].text }));
+    assert.ok(moved.a.x2 > top.x2 + 0.05, JSON.stringify(moved));
+    assert.ok(Math.abs(moved.b.x1 - moved.a.x2) < 0.02 || Math.abs(moved.b.x2 - moved.a.x2) < 0.02, JSON.stringify(moved));
+    assert.match(moved.face, /35,70/);
+    assert.equal(moved.a.m, 8.5);
+    await page.locator('#draw-undo').click();
+    await page.waitForFunction((x) => Math.abs(window.__baudoku.draw.edgeEnds().find((e) => e.label === 'a').x2 - x) < 0.04, top.x2);
+    void side;
+
+    await page.locator('#draw-free').click();
+    await gesture([await at(0.15, 0.75), await at(0.45, 0.75)]);
+    await gesture([await at(0.3, 0.75)]);
+    const free0 = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.free));
+    await gesture([await at(free0.x2, free0.y2), await at(free0.x2, free0.y2 - 0.12)]);
+    const free1 = await page.evaluate(() => window.__baudoku.draw.edgeEnds().find((e) => e.free));
+    assert.ok(Math.abs(free1.y2 - free0.y2) > 0.06, JSON.stringify({ free0, free1 }));
+
     if (tag === 'phone') {
       await sheet('Trapez');
       const trap = [[0.2, 0.3], [0.8, 0.3], [0.62, 0.68], [0.2, 0.68]];
