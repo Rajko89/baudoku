@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -243,4 +243,44 @@ test('Trapez nur mit festgelegter Parallelität', () => {
   const ev = evaluateCycle(d, idsOf(d));
   assert.equal(ev.ok, true, JSON.stringify(ev));
   assert.ok(Math.abs(ev.area - 18) < 0.05, ev.area);
+});
+
+test('Teilen benennt a1/a2, hält die Summe und die Fläche', () => {
+  let d = rect();
+  for (const n of d.nodes) d = toggleRight(d, n.id).doc;
+  d = setMeasure(d, edge(d, 'a').id, 8, 'm');
+  d = setMeasure(d, edge(d, 'b').id, 4, 'm');
+  const before = JSON.parse(JSON.stringify(d.nodes.map((n) => [n.x, n.y])));
+  d = splitEdgeAt(d, edge(d, 'a').id, 0.5);
+  assert.deepEqual(d.nodes.filter((n) => before.some((p) => p[0] === n.x && p[1] === n.y)).length, 4);
+  const a1 = edge(d, 'a1'), a2 = edge(d, 'a2');
+  assert.ok(a1 && a2);
+  assert.ok(Math.abs(a1.measure.value + a2.measure.value - 8) < 0.02);
+  d = setEdgeStyle(d, a1.id, { color: '#e03131', dash: true });
+  d = setEdgeStyle(d, a2.id, { color: '#1864ab', dash: false });
+  assert.equal(edge(d, 'a1').color, '#e03131');
+  assert.equal(edge(d, 'a1').dash, true);
+  const faces = evaluateFaces(d);
+  assert.equal(faces.length, 1);
+  assert.equal(faces[0].ok, true);
+  assert.ok(Math.abs(faces[0].ev.area - 32) < 0.05, faces[0].text);
+  const prop = sketchProposals(d);
+  assert.ok(prop.sides.some((s) => s.bez === 'Seite A1' && s.take));
+  assert.ok(prop.sides.some((s) => s.bez === 'Seite A2' && s.take));
+  assert.equal(prop.areas.filter((a) => a.take).length, 1);
+  const mid = d.nodes.find((n) => d.edges.filter((e) => e.a === n.id || e.b === n.id).length === 2 && (d.edges.find((e) => e.a === n.id || e.b === n.id) || {}).group);
+  d = moveSplitPoint(d, mid.id, mid.x + 0.2, mid.y);
+  const moved = edge(d, 'a1').measure.value + edge(d, 'a2').measure.value;
+  assert.ok(Math.abs(moved - 8) < 0.05, moved);
+  assert.notEqual(edge(d, 'a1').measure.value, edge(d, 'a2').measure.value);
+  d = splitEdgeAt(d, edge(d, 'a1').id, 0.5);
+  assert.ok(d.edges.some((e) => e.label === 'a3'));
+  const sum = d.edges.filter((e) => e.base === 'a').reduce((s, e) => s + e.measure.value, 0);
+  assert.ok(Math.abs(sum - 8) < 0.08, sum);
+  const old = rect();
+  assert.equal(old.edges[0].color, undefined);
+  const shaped = addShape(addShape(old, { kind: 'rect', x: 0.2, y: 0.2, w: 0.1, h: 0.1 }), { kind: 'circle', x: 0.5, y: 0.5, d: 0.1 });
+  assert.equal(shaped.edges.length, old.edges.length);
+  assert.equal(shaped.shapes.length, 2);
+  assert.equal(evaluateFaces(shaped).length, evaluateFaces(old).length);
 });
