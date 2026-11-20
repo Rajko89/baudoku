@@ -150,7 +150,7 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 #drawZoom{position:absolute;top:8px;right:8px;z-index:6;min-width:56px;min-height:44px;padding:0 12px;border:0;border-radius:12px;background:#0b7285;color:#fff;font:800 1rem/1 system-ui,sans-serif}
 #drawZoom[hidden]{display:none!important}
 #snapMark[hidden]{display:none!important}
-#drawMsg{margin:0;max-height:108px;overflow:auto;background:#111;color:#ffd43b;font:600 12px/1.35 ui-monospace,monospace;padding:6px 8px;white-space:pre-wrap}
+#drawMsg{margin:0;max-height:64px;overflow:auto;background:#111;color:#ffd43b;font:600 12px/1.35 ui-monospace,monospace;padding:6px 8px;white-space:pre-wrap}
 #drawForm{display:flex;gap:6px;padding:6px;background:#24303a;align-items:center}
 #drawForm[hidden]{display:none!important}
 #drawForm input,#drawForm select{min-height:48px;font-size:1.05rem;border-radius:10px;border:0;padding:0 8px}
@@ -158,13 +158,16 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 #drawCtx{display:flex;gap:6px;padding:0 8px 6px;background:#1f2933}
 #drawCtx:empty{display:none}
 #drawCtx .btn{flex:1;min-height:48px;background:#fff;color:#1f2933}
-#penBar{display:none;grid-template-columns:repeat(4,1fr);gap:6px;padding:6px 8px;background:#111}
-#penBar.on{display:grid}
-#penBar button{min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-weight:700}
+#penBar{display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;background:#111}
+#penBar.on{display:flex;position:absolute;left:0;right:0;bottom:0;z-index:4;max-height:46%}
+#penBar button{flex:1 1 22%;min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-weight:700}
 #penBar button.on{outline:3px solid #fff}
 #penBar .swatch{color:#fff}
-.draw-tools{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;padding:8px 8px calc(8px + var(--safe-b));background:#1f2933}
-.draw-tools button{min-height:52px;border:0;border-radius:14px;background:#2f3b47;color:#fff;font-size:.86rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+#penBar .yel{color:#111;box-shadow:inset 0 0 0 3px #111}
+#penBar.pen #draw-dash{display:none}
+#penBar.ink [data-w]{display:none}
+.draw-tools{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:6px 6px calc(6px + var(--safe-b));background:#1f2933}
+.draw-tools button{min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-size:.82rem;font-weight:700;display:flex;align-items:center;justify-content:center;gap:4px;cursor:pointer}
 .sk-row{display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid var(--line,#e6eaee)}
 .sk-row.missing{background:#fff4e6;border-radius:10px;padding:8px}
 .sk-row input[type="text"],.sk-row input:not([type="checkbox"]){min-height:44px;flex:1;min-width:0}

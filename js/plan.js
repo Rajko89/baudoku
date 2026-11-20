@@ -2,7 +2,7 @@
 // Zeichenkoordinaten liefern keine Längen und keine rechten Winkel.
 
 export function emptyDoc() {
-  return { next: 1, nodes: [], edges: [], strokes: [], texts: [], rights: [], parallels: [], seq: [], chains: [] };
+  return { next: 1, nodes: [], edges: [], strokes: [], texts: [], rights: [], parallels: [], seq: [], chains: [], shapes: [] };
 }
 function clone(d) { return JSON.parse(JSON.stringify(d)); }
 function nid(d, p) { d.next = d.next || 1; return p + (d.next++); }
@@ -137,7 +137,10 @@ export function addLine(doc, start, end, opts = {}) {
   if (d.edges.some((e) => (e.a === a && e.b === b) || (e.a === b && e.b === a))) return d;
   if (absorbCollinear(d, a, b)) return d;
   const id = nid(d, 'e');
-  d.edges.push({ id, a, b, label: nextEdgeLabel(d), measure: null, free: !!opts.free });
+  const edge = { id, a, b, label: nextEdgeLabel(d), measure: null, free: !!opts.free };
+  if (opts.color) edge.color = opts.color;
+  if (opts.dash != null) edge.dash = !!opts.dash;
+  d.edges.push(edge);
   d.seq = [...(d.seq || []), { type: 'edge', id }];
   if (!opts.free) for (const r of opts.rights || []) addRight(d, r.nodeId, id, r.edgeId);
   return d;
@@ -174,12 +177,179 @@ export function deleteText(doc, id) {
   d.seq = (d.seq || []).filter((s) => !(s.type === 'text' && s.id === id));
   return d;
 }
+function round2(n) { return Math.round((+n) * 100) / 100; }
 export function setMeasure(doc, edgeId, value, unit) {
   const d = clone(doc);
   const e = edgeById(d, edgeId);
   if (!e) return d;
-  if (value == null || value === '' || !isFinite(+value)) e.measure = null;
-  else e.measure = { value: +value, unit: unit || 'm', source: 'user' };
+  if (value == null || value === '' || !isFinite(+value)) { e.measure = null; return d; }
+  const u = unit || e.measure?.unit || e.total?.unit || 'm';
+  e.measure = { value: round2(value), unit: u, source: 'user' };
+  if (e.group && e.total && isFinite(+e.total.value)) {
+    const others = d.edges.filter((x) => x.group === e.group && x.id !== e.id);
+    let rest = +e.total.value - e.measure.value;
+    if (rest < 0.01) rest = 0.01;
+    const sumO = others.reduce((s, o) => s + (isFinite(+o.measure?.value) ? +o.measure.value : 0), 0);
+    others.forEach((o) => {
+      const share = sumO > 0 && isFinite(+o.measure?.value) ? +o.measure.value / sumO : 1 / (others.length || 1);
+      o.measure = { value: round2(rest * share), unit: e.total.unit || u, source: 'user' };
+    });
+    const got = others.reduce((s, o) => s + (+o.measure.value || 0), 0) + e.measure.value;
+    const drift = round2(+e.total.value - got);
+    if (others[0] && Math.abs(drift) >= 0.01) others[0].measure.value = round2(others[0].measure.value + drift);
+  }
+  return d;
+}
+export function setEdgeStyle(doc, edgeId, patch = {}) {
+  const d = clone(doc);
+  const e = edgeById(d, edgeId);
+  if (!e) return d;
+  if (patch.color) e.color = patch.color;
+  if (patch.dash != null) e.dash = !!patch.dash;
+  return d;
+}
+function orderChain(doc, edges) {
+  const deg = new Map();
+  for (const e of edges) {
+    deg.set(e.a, (deg.get(e.a) || 0) + 1);
+    deg.set(e.b, (deg.get(e.b) || 0) + 1);
+  }
+  const ends = [...deg.entries()].filter(([, c]) => c === 1);
+  if (ends.length !== 2) return null;
+  const ordered = [];
+  const used = new Set();
+  let node = ends[0][0];
+  while (ordered.length < edges.length) {
+    const e = edges.find((ed) => !used.has(ed.id) && (ed.a === node || ed.b === node));
+    if (!e) return null;
+    const to = e.a === node ? e.b : e.a;
+    ordered.push({ e, from: node, to });
+    used.add(e.id);
+    node = to;
+  }
+  return ordered;
+}
+function renumberGroup(doc, group, base) {
+  const edges = doc.edges.filter((e) => e.group === group);
+  const ordered = orderChain(doc, edges);
+  if (!ordered) return;
+  ordered.forEach((o, i) => { o.e.base = base; o.e.label = base + (ordered.length > 1 ? String(i + 1) : ''); });
+}
+export function splitEdgeAt(doc, edgeId, t = 0.5) {
+  const d = clone(doc);
+  const e = edgeById(d, edgeId);
+  if (!e) return d;
+  const a = nodeById(d, e.a), b = nodeById(d, e.b);
+  if (!a || !b) return d;
+  const tt = Math.min(0.85, Math.max(0.15, +t || 0.5));
+  const n = { id: nid(d, 'n'), x: a.x + (b.x - a.x) * tt, y: a.y + (b.y - a.y) * tt };
+  d.nodes.push(n);
+  const base = e.base || String(e.label || 'a').replace(/\d+$/, '') || 'a';
+  const group = e.group || nid(d, 'g');
+  const total = e.total || (e.measure && isFinite(+e.measure.value) ? { value: +e.measure.value, unit: e.measure.unit || 'm' } : null);
+  const parent = e.measure && isFinite(+e.measure.value) ? +e.measure.value : (total && !e.group ? +total.value : null);
+  const m1 = parent == null ? null : { value: round2(parent * tt), unit: (e.measure || total).unit || 'm', source: 'user' };
+  const m2 = parent == null ? null : { value: round2(parent - m1.value), unit: (e.measure || total).unit || 'm', source: 'user' };
+  const shared = { free: !!e.free, color: e.color, dash: e.dash, group, base, total: total || (m1 ? { value: round2(m1.value + m2.value), unit: m1.unit } : null) };
+  const e2id = nid(d, 'e');
+  const e1 = { id: e.id, a: e.a, b: n.id, label: base + '1', measure: m1, ...shared };
+  const e2 = { id: e2id, a: n.id, b: e.b, label: base + '2', measure: m2, ...shared };
+  d.edges = d.edges.filter((x) => x.id !== e.id).concat([e1, e2]);
+  d.rights = (d.rights || []).map((r) => {
+    if (r.e1 !== e.id && r.e2 !== e.id) return r;
+    if (r.node !== e.b) return r;
+    return { ...r, e1: r.e1 === e.id ? e2id : r.e1, e2: r.e2 === e.id ? e2id : r.e2 };
+  });
+  d.seq = [...(d.seq || []).filter((s) => !(s.type === 'edge' && s.id === e.id)), { type: 'edge', id: e.id }, { type: 'edge', id: e2id }];
+  renumberGroup(d, group, base);
+  return d;
+}
+export function isSplitNode(doc, nodeId) {
+  const es = (doc.edges || []).filter((e) => e.a === nodeId || e.b === nodeId);
+  return es.length === 2 && !!es[0].group && es[0].group === es[1].group;
+}
+export function moveSplitPoint(doc, nodeId, x, y) {
+  if (!isSplitNode(doc, nodeId)) return moveNode(doc, nodeId, x, y);
+  const d = clone(doc);
+  const es = d.edges.filter((e) => e.a === nodeId || e.b === nodeId);
+  const nL = nodeById(d, es[0].a === nodeId ? es[0].b : es[0].a);
+  const nR = nodeById(d, es[1].a === nodeId ? es[1].b : es[1].a);
+  const node = nodeById(d, nodeId);
+  if (!nL || !nR || !node) return d;
+  const dx = nR.x - nL.x, dy = nR.y - nL.y, l2 = dx * dx + dy * dy || 1;
+  let t = ((x - nL.x) * dx + (y - nL.y) * dy) / l2;
+  t = Math.min(0.92, Math.max(0.08, t));
+  node.x = nL.x + dx * t;
+  node.y = nL.y + dy * t;
+  if (es[0].measure && es[1].measure && isFinite(+es[0].measure.value) && isFinite(+es[1].measure.value)) {
+    const pair = +es[0].measure.value + +es[1].measure.value;
+    const unit = es[0].measure.unit || 'm';
+    const left = es[0].a === nodeId || es[0].b === nodeId ? es[0] : es[1];
+    const fromLeft = left.a === nL.id || left.b === nL.id ? left : es[1];
+    const other = fromLeft === es[0] ? es[1] : es[0];
+    fromLeft.measure = { value: round2(pair * t), unit, source: 'user' };
+    other.measure = { value: round2(pair - fromLeft.measure.value), unit, source: 'user' };
+  }
+  return d;
+}
+export function collapseForCalc(doc) {
+  const groups = new Map();
+  for (const e of doc.edges || []) {
+    if (!e.group) continue;
+    if (!groups.has(e.group)) groups.set(e.group, []);
+    groups.get(e.group).push(e);
+  }
+  const multi = [...groups.values()].filter((g) => g.length > 1);
+  if (!multi.length) return doc;
+  const d = clone(doc);
+  for (const list of multi) {
+    const ordered = orderChain(d, list.map((e) => edgeById(d, e.id)).filter(Boolean));
+    if (!ordered) continue;
+    const keep = ordered[0].e;
+    const drop = new Set(ordered.slice(1).map((o) => o.e.id));
+    const parts = ordered.map((o) => o.e);
+    const allM = parts.every((e) => e.measure && isFinite(+e.measure.value));
+    keep.a = ordered[0].from;
+    keep.b = ordered[ordered.length - 1].to;
+    keep.label = keep.base || String(keep.label || '').replace(/\d+$/, '') || keep.label;
+    if (allM) {
+      const unit = parts[0].measure.unit || 'm';
+      const same = parts.every((e) => (e.measure.unit || 'm') === unit);
+      const sum = same
+        ? parts.reduce((s, e) => s + (+e.measure.value), 0)
+        : parts.reduce((s, e) => s + (toMeters(e.measure.value, e.measure.unit || 'm') || 0), 0);
+      keep.measure = { value: round2(sum), unit: same ? unit : 'm', source: 'user' };
+    } else keep.measure = null;
+    d.edges = d.edges.filter((e) => !drop.has(e.id));
+    const mapId = (id) => (drop.has(id) ? keep.id : id);
+    d.rights = (d.rights || []).map((r) => ({ ...r, e1: mapId(r.e1), e2: mapId(r.e2) })).filter((r) => r.e1 !== r.e2);
+    d.parallels = (d.parallels || []).map((p) => ({ ...p, e1: mapId(p.e1), e2: mapId(p.e2) })).filter((p) => p.e1 !== p.e2);
+    const liveN = new Set();
+    d.edges.forEach((e) => { liveN.add(e.a); liveN.add(e.b); });
+    d.nodes = d.nodes.filter((n) => liveN.has(n.id));
+  }
+  return d;
+}
+export function addShape(doc, shape) {
+  const d = clone(doc);
+  d.shapes = d.shapes || [];
+  const id = nid(d, 'h');
+  d.shapes.push({
+    id, kind: shape.kind === 'circle' ? 'circle' : 'rect',
+    x: shape.x, y: shape.y, w: shape.w, h: shape.h, d: shape.d,
+    color: shape.color || '#111111', dash: !!shape.dash,
+  });
+  return d;
+}
+export function patchShape(doc, id, patch) {
+  const d = clone(doc);
+  const s = (d.shapes || []).find((x) => x.id === id);
+  if (s) Object.assign(s, patch);
+  return d;
+}
+export function deleteShape(doc, id) {
+  const d = clone(doc);
+  d.shapes = (d.shapes || []).filter((s) => s.id !== id);
   return d;
 }
 export function toggleRight(doc, nodeId) {
@@ -486,7 +656,7 @@ export function importLegacyStrokes(strokes) {
   let doc = emptyDoc();
   for (const s of strokes || []) {
     const pts = s.points || [];
-    if (s.tool === 'line' && pts.length >= 2) doc = addLine(doc, { x: pts[0][0], y: pts[0][1] }, { x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] }, { free: !!s.free });
+    if (s.tool === 'line' && pts.length >= 2) doc = addLine(doc, { x: pts[0][0], y: pts[0][1] }, { x: pts[pts.length - 1][0], y: pts[pts.length - 1][1] }, { free: !!s.free, color: s.color, dash: s.dash });
     else if (pts.length >= 2) doc = addStroke(doc, pts, { width: s.width || 0.012, color: s.color || '#e8590c' });
   }
   return doc;
@@ -513,7 +683,7 @@ export function importLegacySketch(sketch, w, h) {
 export function legacyStrokes(doc) {
   const lines = (doc.edges || []).map((e) => {
     const a = nodeById(doc, e.a), b = nodeById(doc, e.b);
-    return a && b ? { tool: 'line', color: e.free ? '#7048e8' : '#1f2933', width: 0.012, points: [[a.x, a.y], [b.x, b.y]], free: !!e.free } : null;
+    return a && b ? { tool: 'line', color: e.color || (e.free ? '#7048e8' : '#1f2933'), width: 0.012, points: [[a.x, a.y], [b.x, b.y]], free: !!e.free, dash: e.dash != null ? !!e.dash : !!e.free } : null;
   }).filter(Boolean);
   const pens = (doc.strokes || []).map((s) => ({ tool: 'pen', color: s.color || '#e8590c', width: s.width || 0.012, points: s.points }));
   return [...pens, ...lines];
@@ -703,18 +873,19 @@ function cycleCrosses(doc, ids) {
   return false;
 }
 export function evaluateFaces(doc) {
+  const calc = collapseForCalc(doc);
   const out = [];
-  for (const cyc of findCycles(doc)) {
-    const edges = cycleEdges(doc, cyc.nodes);
-    if (!edges || cycleCrosses(doc, cyc.nodes)) continue;
-    const poly = cyc.nodes.map((id) => nodeById(doc, id)).filter(Boolean);
+  for (const cyc of findCycles(calc)) {
+    const edges = cycleEdges(calc, cyc.nodes);
+    if (!edges || cycleCrosses(calc, cyc.nodes)) continue;
+    const poly = cyc.nodes.map((id) => nodeById(calc, id)).filter(Boolean);
     if (poly.length < 3) continue;
     const pole = polylabel(poly);
-    const off = (doc.faceOffsets || []).find((f) => f.sig === cyc.sig) || { dx: 0, dy: 0 };
+    const off = (calc.faceOffsets || []).find((f) => f.sig === cyc.sig) || { dx: 0, dy: 0 };
     let x = pole.x + (off.dx || 0), y = pole.y + (off.dy || 0);
     if (!pointIn(poly, x, y)) { x = pole.x; y = pole.y; }
     const free = edges.some((e) => e.free);
-    const ev = free ? fail(['Freie Linie – keine Berechnung']) : evaluateCycle(doc, cyc.nodes);
+    const ev = free ? fail(['Freie Linie – keine Berechnung']) : evaluateCycle(calc, cyc.nodes);
     let text = 'Maße fehlen';
     if (free) text = 'Freie Linie – keine Berechnung';
     else if (ev.contradictions?.length) text = 'Widerspruch';
@@ -722,6 +893,12 @@ export function evaluateFaces(doc) {
     out.push({ sig: cyc.sig, nodes: cyc.nodes, x, y, text, ev, free, ok: !!ev.ok && !free });
   }
   return out;
+}
+export function faceEvalAt(doc, x, y) {
+  const calc = collapseForCalc(doc);
+  const cyc = cycleAt(calc, x, y);
+  if (!cyc) return null;
+  return { nodes: cyc.nodes, sig: cyc.sig, ev: evaluateCycle(calc, cyc.nodes) };
 }
 export function sketchProposals(doc) {
   const labels = (doc.edges || []).map((e) => e.label);
