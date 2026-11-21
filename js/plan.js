@@ -330,15 +330,24 @@ export function collapseForCalc(doc) {
   }
   return d;
 }
+// Seitenlänge eines Symbols als Anteil der kürzeren Blattseite (Kreisdurchmesser bzw. Quadrat).
+export function symbolBox(iw, ih) {
+  const w = Math.max(1, +iw || 1);
+  const h = Math.max(1, +ih || 1);
+  const side = Math.min(w, h) * 0.11;
+  return { d: side / w, w: side / w, h: side / h };
+}
 export function addShape(doc, shape) {
   const d = clone(doc);
   d.shapes = d.shapes || [];
   const id = nid(d, 'h');
-  d.shapes.push({
+  const row = {
     id, kind: shape.kind === 'circle' ? 'circle' : 'rect',
     x: shape.x, y: shape.y, w: shape.w, h: shape.h, d: shape.d,
     color: shape.color || '#111111', dash: !!shape.dash,
-  });
+  };
+  if (shape.symbol) row.symbol = true;
+  d.shapes.push(row);
   return d;
 }
 export function patchShape(doc, id, patch) {

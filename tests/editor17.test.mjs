@@ -68,9 +68,9 @@ try {
     const after = await page.evaluate(() => window.__baudoku.draw.texts()[0]);
     assert.ok(after.x > before.x + 0.08, tag + ' Text ' + JSON.stringify({ before, after }));
     await page.locator('#draw-rect').click();
-    await gesture([await at(0.15, 0.62), await at(0.38, 0.78)]);
+    await gesture([await at(0.25, 0.7)]);
     await page.locator('#draw-circle').click();
-    await gesture([await at(0.62, 0.68), await at(0.78, 0.68)]);
+    await gesture([await at(0.72, 0.7)]);
     const end = await page.evaluate(() => ({ edges: window.__baudoku.draw.edges(), shapes: window.__baudoku.draw.shapes(), texts: window.__baudoku.draw.texts().length }));
     assert.equal(end.edges, 2, tag);
     assert.equal(end.shapes.length, 2, tag);
