@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -282,5 +282,14 @@ test('Teilen benennt a1/a2, hält die Summe und die Fläche', () => {
   const shaped = addShape(addShape(old, { kind: 'rect', x: 0.2, y: 0.2, w: 0.1, h: 0.1 }), { kind: 'circle', x: 0.5, y: 0.5, d: 0.1 });
   assert.equal(shaped.edges.length, old.edges.length);
   assert.equal(shaped.shapes.length, 2);
+  assert.equal(shaped.shapes[0].w, 0.1);
+  assert.equal(shaped.shapes[1].d, 0.1);
   assert.equal(evaluateFaces(shaped).length, evaluateFaces(old).length);
+  const box = symbolBox(1000, 1400);
+  assert.ok(Math.abs(box.d * 1000 - 110) < 0.01, box.d);
+  assert.ok(Math.abs(box.w * 1000 - 110) < 0.01, box.w);
+  assert.ok(Math.abs(box.h * 1400 - 110) < 0.01, box.h);
+  const sym = addShape(emptyDoc(), { kind: 'rect', ...box, x: 0.4, y: 0.4, symbol: true, color: '#111111' });
+  assert.equal(sym.shapes[0].symbol, true);
+  assert.equal(sym.shapes[0].w, box.w);
 });

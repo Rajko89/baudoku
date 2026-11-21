@@ -5,7 +5,7 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, addShape, patchShape, deleteShape,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, addShape, patchShape, deleteShape, symbolBox,
 } from './plan.js';
 
 const INK = '#e8590c';
@@ -198,7 +198,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-line" class="on"><span>／</span>Linie</button>
       <button type="button" id="draw-free"><span>∿</span>Freie Linie</button>
       <button type="button" id="draw-edit"><span>✥</span>Bearbeiten</button>
-      <button type="button" id="draw-rect"><span>▭</span>Rechteck</button>
+      <button type="button" id="draw-rect"><span>▢</span>Quadrat</button>
       <button type="button" id="draw-circle"><span>○</span>Kreis</button>
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
@@ -520,14 +520,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.lineWidth = lw;
       ctx2.stroke();
       ctx2.setLineDash([]);
-      if (selId === s.id) {
-        ctx2.fillStyle = '#fff'; ctx2.strokeStyle = '#0b7285'; ctx2.lineWidth = 4 * z;
-        const handles = s.kind === 'circle' ? [[s.x + (s.d || 0) / 2, s.y]] : [[s.x, s.y], [s.x + s.w, s.y], [s.x + s.w, s.y + s.h], [s.x, s.y + s.h]];
-        for (const [hx, hy] of handles) { ctx2.beginPath(); ctx2.arc(X(hx), Y(hy), 14 * z, 0, 7); ctx2.fill(); ctx2.stroke(); }
-      }
     };
     for (const s of d.shapes || []) drawShape(s, selectedShape);
-    if (active?.tool === 'rect' || active?.tool === 'circle') drawShape(active.shape, null);
     ctx2.textAlign = 'center';
     for (const f of evaluateFaces(d)) {
       ctx2.font = `700 ${16 * z}px sans-serif`;
@@ -598,11 +592,12 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     return null;
   }
-  function shapeHandle(s, p) {
-    const near = (x, y) => Math.hypot(p[0] - x, p[1] - y) <= px(28);
-    if (s.kind === 'circle') return near(s.x + (s.d || 0) / 2, s.y) ? 'd' : null;
-    const pts = [['nw', s.x, s.y], ['ne', s.x + s.w, s.y], ['se', s.x + s.w, s.y + s.h], ['sw', s.x, s.y + s.h]];
-    return pts.find(([, x, y]) => near(x, y))?.[0] || null;
+  function symbolAt(kind, x, y) {
+    const box = symbolBox(view.iw || img.naturalWidth || img.width || 1000, view.ih || img.naturalHeight || img.height || 1400);
+    if (kind === 'circle') return { kind: 'circle', x: clamp(x), y: clamp(y), d: box.d, w: box.w, h: box.h, color: lineColor, dash: false, symbol: true };
+    const left = Math.max(0, Math.min(1 - box.w, x - box.w / 2));
+    const top = Math.max(0, Math.min(1 - box.h, y - box.h / 2));
+    return { kind: 'rect', x: left, y: top, w: box.w, h: box.h, d: box.d, color: lineColor, dash: false, symbol: true };
   }
   function hitFace(p) {
     let best = null, bd = radiusNorm() * 1.8;
@@ -714,6 +709,15 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       active = { tool: 'text', id: t.id, x: p[0], y: p[1], x0: p[0], y0: p[1], moved: false, origin: clone(doc) };
       return;
     }
+    const shapeHit = hitShape(p);
+    if (shapeHit && tool !== 'pen' && tool !== 'measure') {
+      selectedShape = shapeHit.id;
+      selectedEdge = null;
+      selectedText = null;
+      active = { tool: 'shape', id: shapeHit.id, mode: 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: shapeHit.x, oy: shapeHit.y, moved: false, origin: clone(doc) };
+      paint();
+      return;
+    }
     if (tool === 'measure') {
       const e = hitEdge(p);
       if (arm && e && e.id !== arm) {
@@ -740,15 +744,6 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const glyph = hitAngle(p);
     if (glyph && tool !== 'line' && tool !== 'free') { active = { tool: 'angle', nodeId: glyph.id }; return; }
     if (tool === 'edit') {
-      const sh = hitShape(p);
-      if (sh) {
-        selectedShape = sh.id;
-        selectedEdge = null;
-        selectedText = null;
-        active = { tool: 'shape', id: sh.id, mode: shapeHandle(sh, p) || 'move', x: p[0], y: p[1], ox: sh.x, oy: sh.y, ow: sh.w, oh: sh.h, od: sh.d, moved: false, origin: clone(doc) };
-        paint();
-        return;
-      }
       const grab = nearestNode(p, 30);
       const edge = hitEdge(p);
       if (grab) {
@@ -770,9 +765,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     } else if (tool === 'text') {
       selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
     } else if (tool === 'rect' || tool === 'circle') {
-      active = { tool, x0: p[0], y0: p[1], shape: tool === 'circle'
-        ? { kind: 'circle', x: p[0], y: p[1], d: 0.02, color: lineColor, dash: lineDash }
-        : { kind: 'rect', x: p[0], y: p[1], w: 0.02, h: 0.02, color: lineColor, dash: lineDash } };
+      active = { tool: 'symbol', kind: tool, x0: p[0], y0: p[1], raw: [p[0], p[1]] };
     } else if (tool === 'area') {
       const n = hitNode(p);
       const e = n ? null : hitEdge(p);
@@ -826,33 +819,17 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       }
       if (active.moved) { doc = moveText(doc, active.id, p[0], p[1]); paint(); }
     } else if (active.tool === 'shape') {
-      if (cssDist(active.x, active.y, p[0], p[1]) > 8) {
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 8) {
         if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
         active.moved = true;
       }
       if (active.moved) {
         const s = (doc.shapes || []).find((x) => x.id === active.id);
-        if (s) {
-          if (active.mode === 'move') {
-            s.x = active.ox + (p[0] - active.x);
-            s.y = active.oy + (p[1] - active.y);
-          } else if (s.kind === 'circle') {
-            s.d = Math.max(0.04, Math.hypot(p[0] - s.x, (p[1] - s.y) * (view.ih / view.iw)) * 2);
-          } else {
-            const x2 = p[0], y2 = p[1];
-            const x1 = active.mode.includes('w') ? active.ox + active.ow : active.ox;
-            const y1 = active.mode.includes('n') ? active.oy + active.oh : active.oy;
-            s.x = Math.min(x1, x2); s.y = Math.min(y1, y2);
-            s.w = Math.max(0.03, Math.abs(x2 - x1));
-            s.h = Math.max(0.03, Math.abs(y2 - y1));
-          }
-        }
+        if (s) { s.x = active.ox + (p[0] - active.x); s.y = active.oy + (p[1] - active.y); }
         paint();
       }
-    } else if (active.tool === 'rect' || active.tool === 'circle') {
-      if (active.tool === 'circle') active.shape = { ...active.shape, d: Math.max(0.02, Math.hypot(p[0] - active.x0, (p[1] - active.y0) * (view.ih / view.iw)) * 2) };
-      else active.shape = { ...active.shape, x: Math.min(active.x0, p[0]), y: Math.min(active.y0, p[1]), w: Math.abs(p[0] - active.x0), h: Math.abs(p[1] - active.y0) };
-      paint();
+    } else if (active.tool === 'symbol') {
+      active.raw = [p[0], p[1]];
     } else if (active.tool === 'face') {
       const dx = p[0] - active.x, dy = p[1] - active.y;
       if (Math.hypot(dx, dy) > 0.012) active.moved = true;
@@ -899,20 +876,14 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         const t = (doc.texts || []).find((x) => x.id === act.id);
         if (t) openForm('text-edit', t.text);
       }
-    } else if (act.tool === 'rect' || act.tool === 'circle') {
-      let sh = act.shape;
-      const tiny = act.tool === 'circle' ? (sh.d || 0) < 0.04 : (sh.w || 0) < 0.03 || (sh.h || 0) < 0.03;
-      if (tiny) {
-        const aspect = view.iw / (view.ih || 1);
-        if (act.tool === 'circle') sh = { kind: 'circle', x: act.x0, y: act.y0, d: 0.16, color: lineColor, dash: lineDash };
-        else sh = { kind: 'rect', x: act.x0 - 0.08, y: act.y0 - 0.08 * aspect, w: 0.16, h: 0.16 * aspect, color: lineColor, dash: lineDash };
-      }
-      await commit(addShape(doc, sh));
-      selectedShape = doc.shapes?.[doc.shapes.length - 1]?.id || null;
-      selectedEdge = null;
-      selectedText = null;
-      tool = 'edit';
-      paint();
+    } else if (act.tool === 'symbol') {
+      const p = act.raw || [act.x0, act.y0];
+      if (cssDist(act.x0, act.y0, p[0], p[1]) <= 14) {
+        await commit(addShape(doc, symbolAt(act.kind, act.x0, act.y0)));
+        selectedShape = doc.shapes?.[doc.shapes.length - 1]?.id || null;
+        selectedEdge = null;
+        selectedText = null;
+      } else paint();
     } else if (act.tool === 'shape' && act.moved) await persist();
     else if (act.tool === 'face' && act.moved) {
       const base = (doc.faceOffsets || []).find((f) => f.sig === act.sig) || { dx: 0, dy: 0 };
@@ -1035,7 +1006,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     },
     edges: () => doc.edges.length,
     edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
-    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash })),
+    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
+    sheet: () => ({ w: view.iw || img.naturalWidth || img.width || 1, h: view.ih || img.naturalHeight || img.height || 1 }),
     nodes: () => doc.nodes.length,
     texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y })),
     faces: () => evaluateFaces(doc).map((f) => ({ text: f.text, x: f.x, y: f.y, ok: f.ok, free: f.free })),
