@@ -70,9 +70,9 @@ try {
   assert.equal(await page.locator('body').innerText().then((t) => t.includes('Nur Zwei')), false);
   const mainSw = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), base + 'sw.js');
   const zweiSw = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), zwei + 'sw.js');
-  assert.match(mainSw, /baudoku-v1\.7\.6/);
+  assert.match(mainSw, /baudoku-v1\.7\.7/);
   assert.match(mainSw, /\/zwei\//);
-  assert.match(zweiSw, /baudoku2-v1\.7\.6/);
+  assert.match(zweiSw, /baudoku2-v1\.7\.7/);
   assert.doesNotMatch(zweiSw, /pathname\.includes\('\/zwei\/'\)/);
   assert.equal(errors.length, 0, errors.join('\n'));
   await page.close();

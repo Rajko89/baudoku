@@ -58,8 +58,9 @@ function splitEdge(doc, edgeId, x, y) {
   if (!e) return null;
   const n = { id: nid(doc, 'n'), x, y };
   doc.nodes.push(n);
-  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null, free: !!e.free };
-  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null, free: !!e.free };
+  const keptName = String(e.name || '').trim();
+  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}) };
+  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}) };
   if (e.measure) {
     const chain = e.chain || nid(doc, 'c');
     e1.chain = chain; e2.chain = chain;
@@ -255,6 +256,30 @@ export function setEdgeStyle(doc, edgeId, patch = {}) {
   if (patch.dash != null) e.dash = !!patch.dash;
   return d;
 }
+export function cleanPartName(name) {
+  return String(name || '').replace(/\s+/g, ' ').trim();
+}
+export function setEdgeName(doc, edgeId, name) {
+  const d = clone(doc);
+  const e = edgeById(d, edgeId);
+  if (!e) return d;
+  const t = cleanPartName(name);
+  if (!t) delete e.name;
+  else e.name = t;
+  return d;
+}
+export function edgeTitle(edge) {
+  const letter = edge?.label || '';
+  const name = cleanPartName(edge?.name);
+  if (!name) return letter;
+  const has = edge.measure && edge.measure.source !== 'derived' && isFinite(+edge.measure.value);
+  return has ? '' : `${name} (${letter})`;
+}
+export function namedMeasure(edge) {
+  const name = cleanPartName(edge?.name);
+  if (!name || !edge?.measure || edge.measure.source === 'derived' || !isFinite(+edge.measure.value)) return '';
+  return `${name} ${fmtNum(edge.measure.value)} ${edge.measure.unit || 'm'}`;
+}
 function orderChain(doc, edges) {
   const deg = new Map();
   for (const e of edges) {
@@ -298,6 +323,7 @@ export function splitEdgeAt(doc, edgeId, t = 0.5) {
   const m1 = parent == null ? null : { value: round2(parent * tt), unit: (e.measure || total).unit || 'm', source: 'user' };
   const m2 = parent == null ? null : { value: round2(parent - m1.value), unit: (e.measure || total).unit || 'm', source: 'user' };
   const shared = { free: !!e.free, color: e.color, dash: e.dash, group, base, total: total || (m1 ? { value: round2(m1.value + m2.value), unit: m1.unit } : null) };
+  if (cleanPartName(e.name)) shared.name = cleanPartName(e.name);
   const e2id = nid(d, 'e');
   const e1 = { id: e.id, a: e.a, b: n.id, label: base + '1', measure: m1, ...shared };
   const e2 = { id: e2id, a: n.id, b: e.b, label: base + '2', measure: m2, ...shared };
@@ -994,6 +1020,31 @@ export function faceEvalAt(doc, x, y) {
   if (!cyc) return null;
   return { nodes: cyc.nodes, sig: cyc.sig, ev: evaluateCycle(calc, cyc.nodes) };
 }
+const LETTER_BEZ = /^(seite\s+)?[a-z]\d*$/i;
+export function partSummary(rows) {
+  const groups = new Map();
+  const order = [];
+  for (const r of rows || []) {
+    const unit = String(r.einheit || '').trim();
+    if (!unit || /^m²$/i.test(unit) || /^m2$/i.test(unit)) continue;
+    const raw = cleanPartName(r.bez);
+    if (!raw || LETTER_BEZ.test(raw)) continue;
+    if (r.menge == null || r.menge === '' || !isFinite(+r.menge)) continue;
+    const key = `${raw.toLowerCase()}\0${unit.toLowerCase()}`;
+    if (!groups.has(key)) {
+      groups.set(key, { name: raw, unit, parts: [] });
+      order.push(key);
+    }
+    groups.get(key).parts.push(Math.round(+r.menge * 100) / 100);
+  }
+  return order.map((key) => {
+    const g = groups.get(key);
+    if (g.parts.length < 2) return null;
+    const sum = Math.round(g.parts.reduce((s, n) => s + n, 0) * 100) / 100;
+    const bits = g.parts.map((n) => `${fmtNum(n)} ${g.unit}`);
+    return { name: g.name, unit: g.unit, parts: g.parts, sum, text: `${g.name}: ${bits.join(' + ')} = ${fmtNum(sum)} ${g.unit}` };
+  }).filter(Boolean);
+}
 export function sketchProposals(doc) {
   const labels = (doc.edges || []).map((e) => e.label);
   const dup = new Set(labels.filter((l, i) => l && labels.indexOf(l) !== i));
@@ -1005,10 +1056,11 @@ export function sketchProposals(doc) {
   const sides = (doc.edges || []).map((e) => {
     const entered = e.measure && e.measure.source !== 'derived' && isFinite(+e.measure.value);
     const got = known.get(e.id);
-    const ambiguous = dup.has(e.label);
+    const part = cleanPartName(e.name);
+    const ambiguous = !part && dup.has(e.label);
     const missing = !entered && !got;
     return {
-      kind: 'side', id: e.id, bez: `Seite ${String(e.label || '?').toUpperCase()}`,
+      kind: 'side', id: e.id, bez: part || `Seite ${String(e.label || '?').toUpperCase()}`,
       value: entered ? +e.measure.value : (got ? Math.round(got.meters * 100) / 100 : null),
       unit: entered ? (e.measure.unit || 'm') : (got ? 'm' : null),
       missing, ambiguous, derived: !entered && !!got?.derived, free: !!e.free,

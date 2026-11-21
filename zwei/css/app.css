@@ -161,6 +161,9 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 .arrow-labels{display:flex;flex-wrap:wrap;gap:6px;width:100%}
 .arrow-labels button{min-height:44px;padding:0 10px;border:0;border-radius:10px;background:#fff;color:#1f2933;font-weight:700;font-size:.85rem}
 .arrow-labels button.on{background:var(--accent);color:#fff}
+.part-sum{margin:12px 0;border-radius:12px;overflow:hidden;background:#fff;border:1px solid var(--line)}
+.part-sum h3{margin:0;padding:10px 12px;background:var(--header);color:var(--header-fg);font-size:1rem}
+.part-sum p{margin:0;padding:10px 12px;font-weight:700}
 #penBar{display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;background:#111}
 #penBar.on{display:flex;position:absolute;left:0;right:0;bottom:0;z-index:4;max-height:46%;overflow:auto}
 #arrowLabels[hidden]{display:none!important}

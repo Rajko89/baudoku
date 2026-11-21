@@ -9,10 +9,10 @@ import { buildPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
 import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
-import { sketchProposals, importLegacyStrokes, importLegacySketch } from './plan.js';
+import { sketchProposals, importLegacyStrokes, importLegacySketch, partSummary } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku2-v1.7.6';
+const APP_VERSION = 'baudoku2-v1.7.7';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -289,7 +289,10 @@ async function viewProject(pid, tab, q) {
       <button class="ib" data-mv="-1" aria-label="nach oben">↑</button><button class="ib" data-mv="1" aria-label="nach unten">↓</button><button class="ib" data-del aria-label="Löschen">🗑</button></div>
       <div class="src">= <b data-res>${r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : '–'}</b> ${esc(r.einheit || '')}${ph ? ` · aus <a href="#/measure/${ph.id}">Foto ${no.get(ph.id)}${it ? ' – ' + esc(it.name) : ''}</a>${r.manual ? ' (manuell geändert)' : ''}` : ''}${r.sketchId ? ` · <a href="#/sketch/${r.sketchId}">Skizze${r.calc?.faceLabel ? ' ' + esc(r.calc.faceLabel) : ''}</a>` : ''}${String(r.einheit || '').trim() === 'm²' && r.menge != null && r.menge !== '' && isFinite(+r.menge) ? ` · <label class="chk" style="display:inline-flex;min-height:0"><input type="checkbox" data-pick value="${esc(r.id)}"> zur Auswahl</label>` : ''}</div>
       ${r.calc ? `<pre class="calc">${esc(formatCalcText({ pos: r.pos, name: r.bez, calc: r.calc }))}</pre>` : ''}</div>`; };
+    const sums = partSummary(am);
+    const sumHtml = sums.length ? `<section class="part-sum"><h3>Zusammenfassung nach Bauteil</h3>${sums.map((s) => `<p>${esc(s.text)}</p>`).join('')}</section>` : '';
     T.innerHTML = `${units}<div id="amlist">${am.map(row).join('') || '<div class="empty">Noch keine Positionen. Manuell anlegen, im Foto messen oder in der Skizze rechnen.</div>'}</div>
+      ${sumHtml}
       <div class="grid2"><button class="btn primary" id="amAdd">＋ Position</button><button class="btn" id="amSketch">📐 Aus Skizzen</button></div>
       <div id="skImp"></div>
       <button class="btn block" id="amSum" style="margin-top:8px">Gesamtfläche aus Auswahl</button>
@@ -487,7 +490,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku 2 · v1.7.6 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku 2 · v1.7.7 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
     const f = $('#sf');

@@ -5,10 +5,11 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
 } from './plan.js';
 
 const ARROW_LABELS = ['Kamin', 'Dachablauf', 'Notablauf', 'Wandanschluss', 'Dachrinne', 'Attika', 'Lichtkuppel', 'Entlüftung', 'Antenne', 'Gaube', 'Dachfenster'];
+const PART_NAMES = [...ARROW_LABELS, 'Blende', 'Traufe', 'Ortgang', 'First', 'Kehle', 'Grat'];
 const INK = '#e8590c';
 const MEASURE = '#1c7ed6';
 export const LINE_COLORS = [
@@ -143,9 +144,11 @@ function paintDoc(ctx, doc, w, h, selected) {
     ctx.font = `700 ${Math.max(14, w / 40)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.lineWidth = 4; ctx.strokeStyle = '#fff';
-    ctx.strokeText(e.label || '', 0, -10); ctx.fillStyle = '#1f2933'; ctx.fillText(e.label || '', 0, -10);
-    if (e.measure) {
-      const m = `${e.label} = ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}`;
+    const title = edgeTitle(e);
+    if (title) { ctx.strokeText(title, 0, -10); ctx.fillStyle = '#1f2933'; ctx.fillText(title, 0, -10); }
+    const named = namedMeasure(e);
+    const m = named || (e.measure ? `${e.label} = ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}` : '');
+    if (m) {
       ctx.font = `700 ${Math.max(13, w / 46)}px sans-serif`;
       ctx.strokeStyle = '#fff'; ctx.strokeText(m, 0, 16); ctx.fillStyle = MEASURE; ctx.fillText(m, 0, 16);
     }
@@ -248,6 +251,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-dash">gestrichelt</button>
       ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}">${c.name}</button>`).join('')}
       <div id="arrowLabels" class="arrow-labels" hidden></div>
+      <div id="lineNames" class="arrow-labels" hidden></div>
     </div></div>
     <pre id="drawMsg"></pre>
     <form id="drawForm" hidden>
@@ -475,6 +479,15 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       labelBox.hidden = !arrowOn;
       labelBox.innerHTML = arrowOn ? `${ARROW_LABELS.map((l) => `<button type="button" data-arrow-label="${l}" class="${arrowOn.text === l ? 'on' : ''}">${l}</button>`).join('')}<button type="button" id="btn-arrow-text" data-arrow-label="__custom">Eigener Text…</button><button type="button" data-arrow-label="__clear">ohne Text</button><button type="button" id="btn-arrow-side">Seite wechseln</button>` : '';
     }
+    const nameBox = el.querySelector('#lineNames');
+    const lineOn = detail === 'line' ? edgeById(doc, selectedEdge) : null;
+    if (nameBox) {
+      nameBox.hidden = !lineOn;
+      const current = String(lineOn?.name || '').trim().toLowerCase();
+      const recent = recentPartNames().filter((n) => !PART_NAMES.some((p) => p.toLowerCase() === n.toLowerCase()));
+      const btn = (label, value) => `<button type="button" data-line-name="${escAttr(value)}" class="${current && current === String(label).trim().toLowerCase() ? 'on' : ''}">${escAttr(label)}</button>`;
+      nameBox.innerHTML = lineOn ? `${[...PART_NAMES, ...recent].map((l) => btn(l, l)).join('')}${btn('Eigener Name…', '__custom')}${btn('Name entfernen', '__clear')}` : '';
+    }
     el.querySelector('#drawMsg').textContent = msg;
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
@@ -554,10 +567,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const ang = readable(Math.atan2(Y(b.y) - Y(a.y), X(b.x) - X(a.x)));
       ctx2.save(); ctx2.translate(mx, my); ctx2.rotate(ang);
       ctx2.font = `700 ${15 * z}px sans-serif`; ctx2.textAlign = 'center';
-      ctx2.lineWidth = 4 * z; ctx2.strokeStyle = '#fff'; ctx2.strokeText(e.label || '', 0, -8 * z); ctx2.fillStyle = '#1f2933'; ctx2.fillText(e.label || '', 0, -8 * z);
+      ctx2.lineWidth = 4 * z; ctx2.strokeStyle = '#fff';
+      const title = edgeTitle(e);
+      if (title) { ctx2.strokeText(title, 0, -8 * z); ctx2.fillStyle = '#1f2933'; ctx2.fillText(title, 0, -8 * z); ctx2.strokeStyle = '#fff'; }
       const note = ann.find((n) => n.id === e.id);
-      if (e.measure && e.measure.source !== 'derived') {
-        const m = `${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}`;
+      const named = namedMeasure(e);
+      if (named || (e.measure && e.measure.source !== 'derived')) {
+        const m = named || `${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}`;
         ctx2.strokeText(m, 0, 16 * z); ctx2.fillStyle = MEASURE; ctx2.fillText(m, 0, 16 * z);
       } else if (note?.derived) {
         ctx2.font = `italic ${15 * z}px sans-serif`;
@@ -814,6 +830,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       await commit(input.value.trim() ? editText(doc, selectedText, input.value.trim()) : deleteText(doc, selectedText));
     } else if (form.dataset.mode === 'arrow-text' && selectedShape) {
       await commit(patchShape(doc, selectedShape, { text: input.value.trim() }));
+    } else if (form.dataset.mode === 'line-name' && selectedEdge) {
+      const t = input.value.trim();
+      if (t) rememberPartName(t);
+      await commit(setEdgeName(doc, selectedEdge, t));
     }
     if (gen === formGen) form.hidden = true;
   });
@@ -1189,6 +1209,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       if (s) await commit(patchShape(doc, s.id, { side: s.side === -1 ? 1 : -1 }));
       return;
     }
+    if (b.dataset.lineName) {
+      const id = selectedEdge;
+      if (!id) return;
+      const v = b.dataset.lineName;
+      if (v === '__custom') {
+        const cur = edgeById(doc, id);
+        openForm('line-name', cur?.name || '');
+        return;
+      }
+      if (v !== '__clear') rememberPartName(v);
+      await commit(setEdgeName(doc, id, v === '__clear' ? '' : v));
+      return;
+    }
     if (b.dataset.arrowLabel) {
       const s = (doc.shapes || []).find((x) => x.id === selectedShape);
       if (!s) return;
@@ -1234,6 +1267,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   if (photoBtn) photoBtn.onclick = async () => { hidePhoto = !hidePhoto; await persist(); paint(); };
   el.querySelector('#drawBack').onclick = () => onBack();
   const TOOLS_KEY = 'baudoku2-draw-tools';
+  const NAMES_KEY = 'baudoku2-line-names';
+  const escAttr = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  function recentPartNames() {
+    try {
+      const a = JSON.parse(localStorage.getItem(NAMES_KEY) || '[]');
+      return Array.isArray(a) ? a.map((s) => String(s || '').trim()).filter(Boolean) : [];
+    } catch (e) { return []; }
+  }
+  function rememberPartName(name) {
+    const t = String(name || '').replace(/\s+/g, ' ').trim();
+    if (!t || PART_NAMES.some((p) => p.toLowerCase() === t.toLowerCase())) return;
+    const next = [t, ...recentPartNames().filter((x) => x.toLowerCase() !== t.toLowerCase())].slice(0, 8);
+    try { localStorage.setItem(NAMES_KEY, JSON.stringify(next)); } catch (e) { /* privater Modus */ }
+  }
   let toolsOpen = true;
   try { toolsOpen = localStorage.getItem(TOOLS_KEY) !== 'closed'; } catch (e) { /* privater Modus */ }
   function applyDock() {
@@ -1285,7 +1332,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       });
     },
     edges: () => doc.edges.length,
-    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
+    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, name: e.name || '', title: edgeTitle(e), measureText: namedMeasure(e), x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
     shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', side: s.side === -1 ? -1 : 1, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
     arrowLabels() {
       const z = userZoom || 1;

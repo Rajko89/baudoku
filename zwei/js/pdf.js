@@ -5,7 +5,7 @@ import { renderAnnotated, fmtVal } from './measure.js';
 import { measureValue, realMapper } from './geom.js';
 import { renderSketch } from './sketch.js';
 import { renderDoc, blankCanvas } from './draw.js';
-import { importLegacyStrokes, evaluateCycle, findCycles } from './plan.js';
+import { importLegacyStrokes, evaluateCycle, findCycles, partSummary } from './plan.js';
 import { computeFace, formatCalcText, scaleWarning } from './sketch-calc.js';
 
 const M = 15, PW = 210, PH = 297, CW = PW - 2 * M;
@@ -126,6 +126,15 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
       y += rh;
     });
     y += 2; txt('Positionen werden nicht pauschal addiert. Eine Gesamtfläche steht nur dort, wo sie ausdrücklich aus zusammengehörigen m²-Flächen gebildet wurde. Foto-Maße sind Schätzwerte.', 8.5, 'italic', GREY);
+    const sums = partSummary(aufmass);
+    if (sums.length) {
+      y += 2; need(14);
+      doc.setFillColor(...HEAD); doc.rect(M, y, CW, 8, 'F');
+      doc.setTextColor(...HEAD_FG); doc.setFont('helvetica', 'bold'); doc.setFontSize(9.5);
+      doc.text('Zusammenfassung nach Bauteil', M + 2, y + 5.4);
+      y += 11;
+      sums.forEach((s) => txt(s.text, 10.5));
+    }
   }
 
   if (opts.includeSheets !== false && sheets.length) {
