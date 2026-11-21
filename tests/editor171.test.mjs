@@ -49,7 +49,7 @@ try {
     await page.locator('#draw-circle').click();
     await gesture([await at(0.68, 0.42)]);
     const placed = await page.evaluate(() => ({ sheet: window.__baudoku.draw.sheet(), shapes: window.__baudoku.draw.shapes() }));
-    const side = Math.min(placed.sheet.w, placed.sheet.h) * 0.11;
+    const side = Math.min(placed.sheet.w, placed.sheet.h) * 0.022;
     const square = placed.shapes.find((s) => s.kind === 'rect');
     const circle = placed.shapes.find((s) => s.kind === 'circle');
     assert.ok(square && circle, tag + ' ' + JSON.stringify(placed.shapes));
@@ -58,9 +58,14 @@ try {
     assert.ok(Math.abs(square.w * placed.sheet.w - side) < 1, tag + ' Quadrat ' + JSON.stringify(square));
     assert.ok(Math.abs(square.h * placed.sheet.h - side) < 1, tag + ' Quadrat-Höhe ' + JSON.stringify(square));
     assert.ok(Math.abs(circle.d * placed.sheet.w - side) < 1, tag + ' Kreis ' + JSON.stringify(circle));
-    assert.ok(square.w < 0.16 && square.w > 0.05, tag);
+    assert.ok(square.w < 0.04 && square.w > 0.01, tag);
     const before = circle.d;
     await page.locator('#draw-line').click();
+    const sqMid = await at(square.x + square.w / 2, square.y + square.h / 2);
+    await gesture([{ x: sqMid.x + 18, y: sqMid.y }, { x: sqMid.x + 70, y: sqMid.y }]);
+    const grabbed = await page.evaluate(() => window.__baudoku.draw.shapes().find((s) => s.kind === 'rect'));
+    assert.ok(grabbed.x > square.x + 0.03, tag + ' Trefferzone ' + JSON.stringify({ square, grabbed }));
+    assert.equal(grabbed.w, square.w, tag);
     await gesture([await at(circle.x, circle.y), await at(circle.x + 0.12, circle.y + 0.04)]);
     const moved = await page.evaluate(() => window.__baudoku.draw.shapes().find((s) => s.kind === 'circle'));
     assert.equal(moved.d, before, tag + ' Größe blieb');
@@ -69,7 +74,7 @@ try {
     const n0 = await page.evaluate(() => window.__baudoku.draw.shapes().length);
     await gesture([await at(0.15, 0.8), await at(0.55, 0.8)]);
     assert.equal(await page.evaluate(() => window.__baudoku.draw.shapes().length), n0, tag + ' Ziehen formt kein Symbol');
-    if (tag === 'phone') await page.screenshot({ path: join(art, 'baudoku-symbole.png') });
+    if (tag === 'phone') await page.screenshot({ path: join(art, 'baudoku-symbole-klein.png') });
 
     await page.evaluate(async (id) => {
       await window.__baudoku.db.put('sheets', {
@@ -82,7 +87,33 @@ try {
           ],
         },
       });
+      await window.__baudoku.db.put('sheets', {
+        id: 'sh-v171-' + id, projectId: id, title: 'Symbole v1.7.1', width: 1000, height: 1400, created: 1, updated: 1, strokes: [],
+        doc: {
+          next: 6, nodes: [], edges: [], strokes: [], texts: [], rights: [], parallels: [], seq: [], chains: [], faceOffsets: [],
+          shapes: [
+            { id: 's1', kind: 'circle', x: 0.42, y: 0.36, d: 0.11, w: 0.11, h: 110 / 1400, symbol: true, color: '#111111', dash: false },
+            { id: 's2', kind: 'rect', x: 0.62, y: 0.58, w: 0.11, h: 110 / 1400, d: 0.11, symbol: true, color: '#111111', dash: false },
+          ],
+        },
+      });
     }, pid);
+    await page.locator('#drawBack').click();
+    await page.getByText('Symbole v1.7.1', { exact: true }).click();
+    await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.shapes().length === 2 && window.__baudoku.draw.shapes()[0].d < 0.04);
+    const shrunk = await page.evaluate(() => window.__baudoku.draw.shapes());
+    const oldCircle = shrunk.find((s) => s.kind === 'circle');
+    const oldSquare = shrunk.find((s) => s.kind === 'rect');
+    assert.ok(Math.abs(oldCircle.x - 0.42) < 1e-6 && Math.abs(oldCircle.y - 0.36) < 1e-6, tag + ' Kreisposition');
+    assert.ok(Math.abs(oldCircle.d - 0.022) < 1e-6, tag + ' Kreisgröße ' + oldCircle.d);
+    const cx = 0.62 + 0.11 / 2;
+    const cy = 0.58 + (110 / 1400) / 2;
+    assert.ok(Math.abs(oldSquare.x + oldSquare.w / 2 - cx) < 1e-6, tag + ' Quadratposition');
+    assert.ok(Math.abs(oldSquare.y + oldSquare.h / 2 - cy) < 1e-6, tag);
+    assert.ok(Math.abs(oldSquare.w - 0.022) < 1e-6, tag);
+    await page.locator('#drawBack').click();
+    await page.getByText('Symbole v1.7.1', { exact: true }).click();
+    await page.waitForFunction(() => window.__baudoku.draw && Math.abs(window.__baudoku.draw.shapes().find((s) => s.kind === 'circle').d - 0.022) < 1e-6);
     await page.locator('#drawBack').click();
     await page.getByText('Alt v1.7.0', { exact: true }).click();
     await page.waitForFunction(() => window.__baudoku.draw && window.__baudoku.draw.shapes().length === 2);

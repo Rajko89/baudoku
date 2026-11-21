@@ -5,7 +5,7 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, addShape, patchShape, deleteShape, symbolBox,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, addShape, patchShape, deleteShape, symbolBox, fitSymbols,
 } from './plan.js';
 
 const INK = '#e8590c';
@@ -57,7 +57,7 @@ export function renderDoc(img, doc, { hidePhoto = false, max = 1600 } = {}) {
   const ctx = c.getContext('2d');
   if (hidePhoto || !img) { ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height); }
   else ctx.drawImage(img, 0, 0, c.width, c.height);
-  paintDoc(ctx, doc || emptyDoc(), c.width, c.height, null);
+  paintDoc(ctx, fitSymbols(doc || emptyDoc(), iw, ih), c.width, c.height, null);
   return c;
 }
 function readable(ang) {
@@ -147,7 +147,11 @@ function clone(d) { return JSON.parse(JSON.stringify(d)); }
 export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   const blank = !photo && !sketch;
   img = img || blankCanvas(sheet?.width || 1000, sheet?.height || 1400);
-  let doc = docFrom(photo, sheet, sketch);
+  const rawDoc = docFrom(photo, sheet, sketch);
+  const sheetW = img.naturalWidth || img.width || sheet?.width || 1000;
+  const sheetH = img.naturalHeight || img.height || sheet?.height || 1400;
+  let doc = fitSymbols(rawDoc, sheetW, sheetH);
+  const symbolsResized = doc !== rawDoc;
   let hidePhoto = blank || !!photo?.markup?.hidePhoto;
   let tool = 'line';
   let pen = doc.pen || { width: 0.012, color: '#111111' };
@@ -303,6 +307,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     return view.iw * view.s * (r.width / canvas.width) || 1;
   }
   function px(n) { const k = pxPerNorm(); return k > 1 ? n / k : 0.05; }
+  function pxPerNormY() {
+    const r = canvas.getBoundingClientRect();
+    return view.ih * view.s * (r.height / canvas.height) || 1;
+  }
   function cssDist(x0, y0, x1, y1) { return Math.hypot(x1 - x0, y1 - y0) * (pxPerNorm() > 1 ? pxPerNorm() : 400); }
   function radiusNorm() { return px(28); }
   function angDiff(a, b) {
@@ -592,13 +600,22 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     return best;
   }
   function hitShape(p) {
+    const kx = pxPerNorm() || 1;
+    const ky = pxPerNormY() || 1;
     const list = [...(doc.shapes || [])].reverse();
     for (const s of list) {
       if (s.kind === 'circle') {
-        const dx = (p[0] - s.x) * view.iw * view.s;
-        const dy = (p[1] - s.y) * view.ih * view.s;
-        if (Math.hypot(dx, dy) <= (s.d || 0) / 2 * view.iw * view.s + 18) return s;
-      } else if (p[0] >= s.x - px(14) && p[0] <= s.x + (s.w || 0) + px(14) && p[1] >= s.y - px(14) && p[1] <= s.y + (s.h || 0) + px(14)) return s;
+        const dx = (p[0] - s.x) * kx;
+        const dy = (p[1] - s.y) * ky;
+        const vis = (s.d || 0) / 2 * kx;
+        if (Math.hypot(dx, dy) <= Math.max(vis + 12, 22)) return s;
+      } else {
+        const cx = s.x + (s.w || 0) / 2;
+        const cy = s.y + (s.h || 0) / 2;
+        const halfW = Math.max((s.w || 0) / 2 + 14 / kx, 22 / kx);
+        const halfH = Math.max((s.h || 0) / 2 + 14 / ky, 22 / ky);
+        if (Math.abs(p[0] - cx) <= halfW && Math.abs(p[1] - cy) <= halfH) return s;
+      }
     }
     return null;
   }
@@ -1048,6 +1065,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     roLock = true; try { paint(); } finally { roLock = false; }
   });
   ro.observe(el);
+  if (symbolsResized) persist();
   paint();
   const api = {
     destroy() { ro.disconnect(); el.remove(); if (window.__baudoku.draw === api) window.__baudoku.draw = null; },

@@ -330,12 +330,37 @@ export function collapseForCalc(doc) {
   }
   return d;
 }
-// Seitenlänge eines Symbols als Anteil der kürzeren Blattseite (Kreisdurchmesser bzw. Quadrat).
+// Seitenlänge eines Symbols: 20 % der bisherigen Automatik (früher 11 % der kürzeren Blattseite).
 export function symbolBox(iw, ih) {
   const w = Math.max(1, +iw || 1);
   const h = Math.max(1, +ih || 1);
-  const side = Math.min(w, h) * 0.11;
+  const side = Math.min(w, h) * 0.022;
   return { d: side / w, w: side / w, h: side / h };
+}
+function near(a, b) { return Math.abs((+a || 0) - (+b || 0)) < 1e-6; }
+// v1.7.1-Symbole auf die neue Standardgröße setzen. Der Mittelpunkt bleibt, freie Formen auch.
+export function fitSymbols(doc, iw, ih) {
+  const shapes = doc?.shapes || [];
+  if (!shapes.some((s) => s && s.symbol)) return doc;
+  const box = symbolBox(iw, ih);
+  let changed = false;
+  const next = shapes.map((s) => {
+    if (!s?.symbol) return s;
+    if (s.kind === 'circle') {
+      if (near(s.d, box.d) && near(s.w, box.w) && near(s.h, box.h)) return s;
+      changed = true;
+      return { ...s, d: box.d, w: box.w, h: box.h };
+    }
+    const cx = (+s.x || 0) + (+s.w || 0) / 2;
+    const cy = (+s.y || 0) + (+s.h || 0) / 2;
+    const x = cx - box.w / 2;
+    const y = cy - box.h / 2;
+    if (near(s.w, box.w) && near(s.h, box.h) && near(s.d, box.d) && near(s.x, x) && near(s.y, y)) return s;
+    changed = true;
+    return { ...s, x, y, w: box.w, h: box.h, d: box.d };
+  });
+  if (!changed) return doc;
+  return { ...doc, shapes: next };
 }
 export function addShape(doc, shape) {
   const d = clone(doc);
