@@ -5,7 +5,7 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, addShape, patchShape, deleteShape, symbolBox, fitSymbols,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan,
 } from './plan.js';
 
 const INK = '#e8590c';
@@ -24,6 +24,48 @@ function edgeLook(e) {
   return { color: e.color || (e.free ? '#7048e8' : '#1f2933'), dash: e.dash != null ? !!e.dash : !!e.free };
 }
 function yellow(c) { return String(c || '').toLowerCase() === '#ffd43b'; }
+function paintArrow(ctx, x1, y1, x2, y2, { color = '#111111', dash = false, lw = 4, z = 1, text = '' } = {}) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const head = Math.max(14 * z, Math.min(len * 0.42, 36 * z));
+  const wing = head * 0.58;
+  const bx = x2 - ux * head, by = y2 - uy * head;
+  ctx.save();
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.setLineDash(dash ? [8 * z, 6 * z] : []);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(bx, by);
+  if (yellow(color)) { ctx.strokeStyle = '#1f2933'; ctx.lineWidth = lw + 3 * z; ctx.stroke(); }
+  ctx.strokeStyle = color || '#111111';
+  ctx.lineWidth = lw;
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(bx + -uy * wing, by + ux * wing);
+  ctx.lineTo(bx - -uy * wing, by - ux * wing);
+  ctx.closePath();
+  if (yellow(color)) { ctx.lineWidth = 3 * z; ctx.strokeStyle = '#1f2933'; ctx.stroke(); }
+  ctx.fillStyle = color || '#111111';
+  ctx.fill();
+  if (text) {
+    ctx.font = `700 ${Math.max(14, 16 * z)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const lx = x1 - ux * (20 * z);
+    const ly = y1 - uy * (20 * z);
+    const tw = ctx.measureText(text).width + 12 * z;
+    const th = 22 * z;
+    ctx.fillStyle = 'rgba(255,255,255,.94)';
+    ctx.fillRect(lx - tw / 2, ly - th / 2, tw, th);
+    ctx.fillStyle = '#111';
+    ctx.fillText(text, lx, ly);
+  }
+  ctx.restore();
+}
 
 export function drawStrokes(ctx, strokes, w, h) {
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
@@ -110,6 +152,10 @@ function paintDoc(ctx, doc, w, h, selected) {
     ctx.fillStyle = '#111'; ctx.textAlign = 'left'; ctx.fillText(t.text || '', t.x * w, t.y * h);
   }
   for (const s of doc.shapes || []) {
+    if (s.kind === 'arrow') {
+      paintArrow(ctx, s.x * w, s.y * h, (s.x2 ?? s.x) * w, (s.y2 ?? s.y) * h, { color: s.color, dash: !!s.dash, lw: Math.max(4, w / 140), z: Math.max(1, w / 700), text: s.text || '' });
+      continue;
+    }
     ctx.beginPath();
     if (s.kind === 'circle') {
       const r = (s.d || 0.1) / 2 * w;
@@ -207,6 +253,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-edit"><span>✥</span>Bearbeiten</button>
       <button type="button" id="draw-rect"><span>▢</span>Quadrat</button>
       <button type="button" id="draw-circle"><span>○</span>Kreis</button>
+      <button type="button" id="draw-arrow"><span>➜</span>Pfeil</button>
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
@@ -398,7 +445,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const zoomBtn = el.querySelector('#drawZoom');
     if (zoomBtn) zoomBtn.hidden = Math.abs(userZoom - 1) < 0.02;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
-    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle', 'arrow'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
     const bar = el.querySelector('#penBar');
     const showInk = tool === 'pen' || detail === 'line' || detail === 'shape';
     bar.classList.toggle('on', showInk);
@@ -415,7 +462,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
       detail === 'line' && selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
-      detail === 'shape' && selectedShape ? '<button type="button" id="btn-del-shape" class="btn danger">Form löschen</button>' : '',
+      detail === 'shape' && selectedShape ? `${(doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? '<button type="button" id="btn-arrow-text" class="btn">Text am Pfeil</button>' : ''}<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>` : '',
       detail === 'text' && selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
     ].join('');
     const right = el.querySelector('#btn-right');
@@ -443,6 +490,11 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       selectedEdge = id;
       msg = 'Teilpunkt ziehen, um die Längen zu verschieben.';
       await refreshArea();
+    };
+    const arrowText = el.querySelector('#btn-arrow-text');
+    if (arrowText) arrowText.onclick = () => {
+      const s = (doc.shapes || []).find((x) => x.id === selectedShape);
+      if (s) openForm('arrow-text', s.text || '');
     };
     const delShape = el.querySelector('#btn-del-shape');
     if (delShape) delShape.onclick = async () => {
@@ -526,6 +578,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.fillStyle = '#111'; ctx2.textAlign = 'left'; ctx2.fillText(t.text || '', X(t.x), Y(t.y));
     }
     const drawShape = (s, selId) => {
+      if (s.kind === 'arrow') {
+        paintArrow(ctx2, X(s.x), Y(s.y), X(s.x2 ?? s.x), Y(s.y2 ?? s.y), { color: s.color, dash: !!s.dash, lw: (selId === s.id ? 8 : 4) * z, z, text: s.text || '' });
+        return;
+      }
       ctx2.beginPath();
       if (s.kind === 'circle') {
         const r = (s.d || 0.1) / 2 * view.iw * view.s;
@@ -540,6 +596,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.setLineDash([]);
     };
     for (const s of d.shapes || []) drawShape(s, selectedShape);
+    if (active?.tool === 'arrow' && active.raw) {
+      const far = Math.hypot(active.raw[0] - active.x0, active.raw[1] - active.y0) > 0.01;
+      if (far) paintArrow(ctx2, X(active.x0), Y(active.y0), X(active.raw[0]), Y(active.raw[1]), { color: lineColor, dash: false, lw: 4 * z, z });
+    }
     ctx2.textAlign = 'center';
     for (const f of evaluateFaces(d)) {
       ctx2.font = `700 ${16 * z}px sans-serif`;
@@ -599,11 +659,27 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     return best;
   }
+  function arrowPart(s, p) {
+    const kx = pxPerNorm() || 1, ky = pxPerNormY() || 1;
+    const ax = s.x * kx, ay = s.y * ky, bx = (s.x2 ?? s.x) * kx, by = (s.y2 ?? s.y) * ky;
+    const px0 = p[0] * kx, py0 = p[1] * ky;
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    let t = ((px0 - ax) * dx + (py0 - ay) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const dist = Math.hypot(px0 - (ax + t * dx), py0 - (ay + t * dy));
+    const tip = Math.hypot(px0 - bx, py0 - by);
+    const tail = Math.hypot(px0 - ax, py0 - ay);
+    if (dist > 22 && tip > 22 && tail > 22) return null;
+    if (t >= 0.72) return 'tip';
+    if (t <= 0.28) return 'tail';
+    return 'shaft';
+  }
   function hitShape(p) {
     const kx = pxPerNorm() || 1;
     const ky = pxPerNormY() || 1;
     const list = [...(doc.shapes || [])].reverse();
     for (const s of list) {
+      if (s.kind === 'arrow') { if (arrowPart(s, p)) return s; continue; }
       if (s.kind === 'circle') {
         const dx = (p[0] - s.x) * kx;
         const dy = (p[1] - s.y) * ky;
@@ -677,6 +753,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       if (input.value.trim()) await commit(addText(doc, p[0], p[1], input.value.trim()));
     } else if (form.dataset.mode === 'text-edit' && selectedText) {
       await commit(input.value.trim() ? editText(doc, selectedText, input.value.trim()) : deleteText(doc, selectedText));
+    } else if (form.dataset.mode === 'arrow-text' && selectedShape) {
+      await commit(patchShape(doc, selectedShape, { text: input.value.trim() }));
     }
     if (gen === formGen) form.hidden = true;
   });
@@ -731,15 +809,16 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     down = { x: ev.clientX, y: ev.clientY, line: hitEdge(p), shape: hitShape(p), text: hitText(p) };
     const t = hitText(p);
     const shapeHit = hitShape(p);
-    if (tool === 'rect' || tool === 'circle') {
-      if (shapeHit) {
-        selectedShape = shapeHit.id;
-        selectedEdge = null;
-        selectedText = null;
-        active = { tool: 'shape', id: shapeHit.id, mode: 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: shapeHit.x, oy: shapeHit.y, moved: false, origin: clone(doc) };
-        paint();
-        return;
-      }
+    const grabShape = (s) => {
+      selectedShape = s.id;
+      selectedEdge = null;
+      selectedText = null;
+      active = { tool: 'shape', id: s.id, mode: s.kind === 'arrow' ? (arrowPart(s, p) || 'shaft') : 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: s.x, oy: s.y, ox2: s.x2, oy2: s.y2, moved: false, origin: clone(doc) };
+      paint();
+    };
+    if (tool === 'rect' || tool === 'circle' || tool === 'arrow') {
+      if (shapeHit) { grabShape(shapeHit); return; }
+      if (tool === 'arrow') { active = { tool: 'arrow', x0: p[0], y0: p[1], raw: [p[0], p[1]] }; return; }
       active = { tool: 'symbol', kind: tool, x0: p[0], y0: p[1], raw: [p[0], p[1]] };
       return;
     }
@@ -750,14 +829,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       active = { tool: 'text', id: t.id, x: p[0], y: p[1], x0: p[0], y0: p[1], moved: false, origin: clone(doc) };
       return;
     }
-    if (shapeHit && tool !== 'pen' && tool !== 'measure') {
-      selectedShape = shapeHit.id;
-      selectedEdge = null;
-      selectedText = null;
-      active = { tool: 'shape', id: shapeHit.id, mode: 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: shapeHit.x, oy: shapeHit.y, moved: false, origin: clone(doc) };
-      paint();
-      return;
-    }
+    if (shapeHit && tool !== 'pen' && tool !== 'measure') { grabShape(shapeHit); return; }
     if (tool === 'measure') {
       const e = hitEdge(p);
       if (arm && e && e.id !== arm) {
@@ -868,11 +940,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       }
       if (active.moved) {
         const s = (doc.shapes || []).find((x) => x.id === active.id);
-        if (s) { s.x = active.ox + (p[0] - active.x); s.y = active.oy + (p[1] - active.y); }
+        if (s) {
+          if (active.mode === 'tip') { s.x2 = p[0]; s.y2 = p[1]; }
+          else if (active.mode === 'tail') { s.x = p[0]; s.y = p[1]; }
+          else {
+            s.x = active.ox + (p[0] - active.x);
+            s.y = active.oy + (p[1] - active.y);
+            if (s.kind === 'arrow') { s.x2 = active.ox2 + (p[0] - active.x); s.y2 = active.oy2 + (p[1] - active.y); }
+          }
+        }
         paint();
       }
-    } else if (active.tool === 'symbol') {
+    } else if (active.tool === 'symbol' || active.tool === 'arrow') {
       active.raw = [p[0], p[1]];
+      if (active.tool === 'arrow') paint();
     } else if (active.tool === 'face') {
       const dx = p[0] - active.x, dy = p[1] - active.y;
       if (Math.hypot(dx, dy) > 0.012) active.moved = true;
@@ -926,6 +1007,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         selectedEdge = null;
         selectedText = null;
       } else paint();
+    } else if (act.tool === 'arrow') {
+      const p = act.raw || [act.x0, act.y0];
+      const dragged = cssDist(act.x0, act.y0, p[0], p[1]) > 14;
+      let x2 = p[0], y2 = p[1];
+      if (!dragged || Math.hypot(x2 - act.x0, y2 - act.y0) < 0.012) {
+        const span = arrowSpan(view.iw || 1000, view.ih || 1400);
+        x2 = act.x0 + span.dx;
+        y2 = act.y0;
+        if (x2 > 0.98) x2 = act.x0 - span.dx;
+      }
+      await commit(addShape(doc, { kind: 'arrow', x: act.x0, y: act.y0, x2, y2, color: lineColor, dash: false }));
+      selectedShape = doc.shapes?.[doc.shapes.length - 1]?.id || null;
+      selectedEdge = null;
+      selectedText = null;
     } else if (act.tool === 'shape' && act.moved) await persist();
     else if (act.tool === 'face' && act.moved) {
       const base = (doc.faceOffsets || []).find((f) => f.sig === act.sig) || { dx: 0, dy: 0 };
@@ -955,7 +1050,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (pointers.size > 0) { beginPinch(); return; }
     const movedPx = down ? Math.hypot(ev.clientX - down.x, ev.clientY - down.y) : 0;
     const tap = !down || movedPx <= 14;
-    const placing = tool === 'rect' || tool === 'circle';
+    const placing = tool === 'rect' || tool === 'circle' || tool === 'arrow';
     const doubleShape = !down || tool === 'pen' || tool === 'measure' ? null : down.shape;
     if (tap && !(placing && !doubleShape) && Date.now() - lastTapAt < 360 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
       const textHit = !down || tool === 'measure' || placing ? null : down.text;
@@ -1000,6 +1095,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-edit').onclick = () => { tool = 'edit'; paint(); };
   el.querySelector('#draw-rect').onclick = () => { tool = 'rect'; paint(); };
   el.querySelector('#draw-circle').onclick = () => { tool = 'circle'; paint(); };
+  el.querySelector('#draw-arrow').onclick = () => { tool = 'arrow'; paint(); };
   el.querySelector('#draw-text').onclick = () => { tool = 'text'; paint(); };
   el.querySelector('#penBar').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button'); if (!b) return;
@@ -1092,7 +1188,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     },
     edges: () => doc.edges.length,
     edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
-    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
+    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
     sheet: () => ({ w: view.iw || img.naturalWidth || img.width || 1, h: view.ih || img.naturalHeight || img.height || 1 }),
     toolsOpen: () => toolsOpen,
     nodes: () => doc.nodes.length,

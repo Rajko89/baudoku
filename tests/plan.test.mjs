@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols, arrowSpan } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -316,4 +316,12 @@ test('Teilen benennt a1/a2, hält die Summe und die Fläche', () => {
   assert.equal(free.h, 0.18);
   assert.equal(free.symbol, undefined);
   assert.equal(fitSymbols(fit, 1000, 1400), fit);
+  const span = arrowSpan(1000, 1400);
+  assert.ok(Math.abs(span.dx * 1000 - 120) < 0.01, span.dx);
+  const pointed = addShape(old, { kind: 'arrow', x: 0.7, y: 0.5, x2: 0.45, y2: 0.4, color: '#e03131', text: 'Kamin' });
+  assert.equal(pointed.shapes.at(-1).kind, 'arrow');
+  assert.equal(pointed.shapes.at(-1).text, 'Kamin');
+  assert.equal(pointed.shapes.at(-1).x2, 0.45);
+  assert.equal(pointed.edges.length, old.edges.length);
+  assert.equal(evaluateFaces(pointed).length, evaluateFaces(old).length);
 });

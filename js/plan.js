@@ -337,6 +337,13 @@ export function symbolBox(iw, ih) {
   const side = Math.min(w, h) * 0.022;
   return { d: side / w, w: side / w, h: side / h };
 }
+// Standardlänge eines Hinweispfeils, als Anteil der kürzeren Blattseite.
+export function arrowSpan(iw, ih) {
+  const w = Math.max(1, +iw || 1);
+  const h = Math.max(1, +ih || 1);
+  const side = Math.min(w, h) * 0.12;
+  return { dx: side / w, dy: 0 };
+}
 function near(a, b) { return Math.abs((+a || 0) - (+b || 0)) < 1e-6; }
 // v1.7.1-Symbole auf die neue Standardgröße setzen. Der Mittelpunkt bleibt, freie Formen auch.
 export function fitSymbols(doc, iw, ih) {
@@ -345,7 +352,7 @@ export function fitSymbols(doc, iw, ih) {
   const box = symbolBox(iw, ih);
   let changed = false;
   const next = shapes.map((s) => {
-    if (!s?.symbol) return s;
+    if (!s?.symbol || s.kind === 'arrow') return s;
     if (s.kind === 'circle') {
       if (near(s.d, box.d) && near(s.w, box.w) && near(s.h, box.h)) return s;
       changed = true;
@@ -366,12 +373,18 @@ export function addShape(doc, shape) {
   const d = clone(doc);
   d.shapes = d.shapes || [];
   const id = nid(d, 'h');
-  const row = {
-    id, kind: shape.kind === 'circle' ? 'circle' : 'rect',
-    x: shape.x, y: shape.y, w: shape.w, h: shape.h, d: shape.d,
-    color: shape.color || '#111111', dash: !!shape.dash,
-  };
-  if (shape.symbol) row.symbol = true;
+  const kind = shape.kind === 'circle' ? 'circle' : shape.kind === 'arrow' ? 'arrow' : 'rect';
+  const row = { id, kind, x: shape.x, y: shape.y, color: shape.color || '#111111', dash: !!shape.dash };
+  if (kind === 'arrow') {
+    row.x2 = +shape.x2;
+    row.y2 = +shape.y2;
+    row.text = String(shape.text || '');
+  } else {
+    row.w = shape.w;
+    row.h = shape.h;
+    row.d = shape.d;
+    if (shape.symbol) row.symbol = true;
+  }
   d.shapes.push(row);
   return d;
 }
