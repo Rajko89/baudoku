@@ -49,6 +49,7 @@ self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (e.request.method !== 'GET' || u.origin !== self.location.origin) return; // z. B. Nominatim: direkt ans Netz
   if (u.pathname.endsWith('/sw.js')) return; // Update-Prüfung darf nicht aus dem App-Cache kommen
+  if (u.pathname.includes('/zwei/')) return; // Zweit-App hat eigenen Service Worker und eigenen Cache
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const hit = await cache.match(e.request, { ignoreSearch: true });
