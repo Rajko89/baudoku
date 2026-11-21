@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -286,10 +286,34 @@ test('Teilen benennt a1/a2, hält die Summe und die Fläche', () => {
   assert.equal(shaped.shapes[1].d, 0.1);
   assert.equal(evaluateFaces(shaped).length, evaluateFaces(old).length);
   const box = symbolBox(1000, 1400);
-  assert.ok(Math.abs(box.d * 1000 - 110) < 0.01, box.d);
-  assert.ok(Math.abs(box.w * 1000 - 110) < 0.01, box.w);
-  assert.ok(Math.abs(box.h * 1400 - 110) < 0.01, box.h);
+  assert.ok(Math.abs(box.d * 1000 - 22) < 0.01, box.d);
+  assert.ok(Math.abs(box.w * 1000 - 22) < 0.01, box.w);
+  assert.ok(Math.abs(box.h * 1400 - 22) < 0.01, box.h);
+  assert.ok(box.d < 0.11 * 0.25, 'deutlich kleiner als v1.7.1');
   const sym = addShape(emptyDoc(), { kind: 'rect', ...box, x: 0.4, y: 0.4, symbol: true, color: '#111111' });
   assert.equal(sym.shapes[0].symbol, true);
   assert.equal(sym.shapes[0].w, box.w);
+  const legacy = emptyDoc();
+  legacy.shapes = [
+    { id: 'h1', kind: 'circle', x: 0.4, y: 0.3, d: 0.11, w: 0.11, h: 110 / 1400, symbol: true, color: '#111111', dash: false },
+    { id: 'h2', kind: 'rect', x: 0.2, y: 0.5, w: 0.11, h: 110 / 1400, d: 0.11, symbol: true, color: '#111111', dash: false },
+    { id: 'h3', kind: 'rect', x: 0.1, y: 0.1, w: 0.42, h: 0.18, color: '#1864ab', dash: false },
+  ];
+  const fit = fitSymbols(legacy, 1000, 1400);
+  const circle = fit.shapes.find((s) => s.id === 'h1');
+  const square = fit.shapes.find((s) => s.id === 'h2');
+  const free = fit.shapes.find((s) => s.id === 'h3');
+  assert.equal(circle.x, 0.4);
+  assert.equal(circle.y, 0.3);
+  assert.ok(Math.abs(circle.d - box.d) < 1e-9);
+  const ocx = 0.2 + 0.11 / 2;
+  const ocy = 0.5 + (110 / 1400) / 2;
+  assert.ok(Math.abs(square.x + square.w / 2 - ocx) < 1e-9);
+  assert.ok(Math.abs(square.y + square.h / 2 - ocy) < 1e-9);
+  assert.ok(Math.abs(square.w - box.w) < 1e-9);
+  assert.equal(free.x, 0.1);
+  assert.equal(free.w, 0.42);
+  assert.equal(free.h, 0.18);
+  assert.equal(free.symbol, undefined);
+  assert.equal(fitSymbols(fit, 1000, 1400), fit);
 });
