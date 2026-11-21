@@ -730,6 +730,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const p = norm(ev);
     down = { x: ev.clientX, y: ev.clientY, line: hitEdge(p), shape: hitShape(p), text: hitText(p) };
     const t = hitText(p);
+    const shapeHit = hitShape(p);
+    if (tool === 'rect' || tool === 'circle') {
+      if (shapeHit) {
+        selectedShape = shapeHit.id;
+        selectedEdge = null;
+        selectedText = null;
+        active = { tool: 'shape', id: shapeHit.id, mode: 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: shapeHit.x, oy: shapeHit.y, moved: false, origin: clone(doc) };
+        paint();
+        return;
+      }
+      active = { tool: 'symbol', kind: tool, x0: p[0], y0: p[1], raw: [p[0], p[1]] };
+      return;
+    }
     if (t && tool !== 'measure') {
       selectedText = t.id;
       selectedEdge = null;
@@ -737,7 +750,6 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       active = { tool: 'text', id: t.id, x: p[0], y: p[1], x0: p[0], y0: p[1], moved: false, origin: clone(doc) };
       return;
     }
-    const shapeHit = hitShape(p);
     if (shapeHit && tool !== 'pen' && tool !== 'measure') {
       selectedShape = shapeHit.id;
       selectedEdge = null;
@@ -760,6 +772,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       if (!e) { selectedShape = null; selectedText = null; }
       if (e) { unit.value = e.measure?.unit || 'm'; openForm('measure', e.measure ? String(e.measure.value).replace('.', ',') : ''); }
       paint();
+      return;
+    }
+    if (tool === 'text') {
+      selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
       return;
     }
     const face = hitFace(p);
@@ -793,10 +809,6 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const start = snap || { x: p[0], y: p[1] };
       active = { tool, start, end: start, angled: null, x0: p[0], y0: p[1], raw: [p[0], p[1]], grab, hitEdge: hitEdge(p)?.id || null, decided: null };
       showSnap(snap);
-    } else if (tool === 'text') {
-      selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
-    } else if (tool === 'rect' || tool === 'circle') {
-      active = { tool: 'symbol', kind: tool, x0: p[0], y0: p[1], raw: [p[0], p[1]] };
     } else if (tool === 'area') {
       const n = hitNode(p);
       const e = n ? null : hitEdge(p);
@@ -943,10 +955,12 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (pointers.size > 0) { beginPinch(); return; }
     const movedPx = down ? Math.hypot(ev.clientX - down.x, ev.clientY - down.y) : 0;
     const tap = !down || movedPx <= 14;
-    if (tap && Date.now() - lastTapAt < 360 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
-      const textHit = !down || tool === 'measure' ? null : down.text;
-      const shapeHit = !down || tool === 'pen' || tool === 'measure' ? null : down.shape;
-      const lineHit = down ? down.line : null;
+    const placing = tool === 'rect' || tool === 'circle';
+    const doubleShape = !down || tool === 'pen' || tool === 'measure' ? null : down.shape;
+    if (tap && !(placing && !doubleShape) && Date.now() - lastTapAt < 360 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
+      const textHit = !down || tool === 'measure' || placing ? null : down.text;
+      const shapeHit = doubleShape;
+      const lineHit = down && !placing && tool !== 'text' ? down.line : null;
       active = null;
       showSnap(null);
       hands = null;
