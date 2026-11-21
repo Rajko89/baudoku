@@ -162,7 +162,8 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 .arrow-labels button{min-height:44px;padding:0 10px;border:0;border-radius:10px;background:#fff;color:#1f2933;font-weight:700;font-size:.85rem}
 .arrow-labels button.on{background:var(--accent);color:#fff}
 #penBar{display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;background:#111}
-#penBar.on{display:flex;position:absolute;left:0;right:0;bottom:0;z-index:4;max-height:46%}
+#penBar.on{display:flex;position:absolute;left:0;right:0;bottom:0;z-index:4;max-height:46%;overflow:auto}
+#arrowLabels[hidden]{display:none!important}
 #penBar button{flex:1 1 22%;min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-weight:700}
 #penBar button.on{outline:3px solid #fff}
 #penBar .swatch{color:#fff}

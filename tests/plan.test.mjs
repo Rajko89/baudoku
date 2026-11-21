@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, addText, moveText } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace, addText, moveText } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -338,4 +338,17 @@ test('Text ohne Winkel bleibt 0°, Drehung rastet ein und bleibt lesbar', () => 
   assert.ok(Math.abs(snapAngle(85 * Math.PI / 180, []) - Math.PI / 2) < 0.01);
   const guide = 20 * Math.PI / 180;
   assert.ok(Math.abs(snapAngle(24 * Math.PI / 180, [guide]) - guide) < 0.01);
+  const right = arrowLabelPlace(0, 0, 100, 0, 1, 16, 4);
+  assert.ok(Math.abs(right.x - 50) < 0.01, right.x);
+  assert.ok(right.y < -10, right.y);
+  assert.ok(Math.abs(right.ang) < 0.01);
+  const left = arrowLabelPlace(100, 0, 0, 0, 1, 16, 4);
+  assert.ok(left.y < -10, 'nach links zeigt der Text trotzdem oben ' + left.y);
+  const other = arrowLabelPlace(0, 0, 100, 0, -1, 16, 4);
+  assert.ok(other.y > 10, other.y);
+  const down = arrowLabelPlace(0, 0, 2, 80, 1, 16, 4);
+  assert.ok(Math.abs(down.ang - Math.PI / 2) < 0.05 || Math.abs(down.ang + Math.PI / 2) < 0.05);
+  const kept = addShape(emptyDoc(), { kind: 'arrow', x: 0.2, y: 0.2, x2: 0.5, y2: 0.2, text: 'Kamin' });
+  assert.equal(kept.shapes[0].text, 'Kamin');
+  assert.equal(kept.shapes[0].side, undefined);
 });

@@ -177,6 +177,15 @@ export function setTextAngle(doc, id, ang) {
   if (t && isFinite(+ang)) t.ang = +ang;
   return d;
 }
+export function arrowLabelPlace(x1, y1, x2, y2, side = 1, font = 16, extra = 4) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const show = uprightAngle(Math.atan2(dy, dx));
+  const s = side === -1 ? -1 : 1;
+  const ox = Math.sin(show) * s;
+  const oy = -Math.cos(show) * s;
+  const gap = Math.max(1, (+font || 16) / 2 + (+extra || 0));
+  return { x: (x1 + x2) / 2 + ox * gap, y: (y1 + y2) / 2 + oy * gap, ang: show, ox, oy, gap };
+}
 export function uprightAngle(ang) {
   let a = +ang || 0;
   if (!isFinite(a)) return 0;

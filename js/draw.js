@@ -5,7 +5,7 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
 } from './plan.js';
 
 const ARROW_LABELS = ['Kamin', 'Dachablauf', 'Notablauf', 'Wandanschluss', 'Dachrinne', 'Attika', 'Lichtkuppel', 'Entlüftung', 'Antenne', 'Gaube', 'Dachfenster'];
@@ -25,7 +25,7 @@ function edgeLook(e) {
   return { color: e.color || (e.free ? '#7048e8' : '#1f2933'), dash: e.dash != null ? !!e.dash : !!e.free };
 }
 function yellow(c) { return String(c || '').toLowerCase() === '#ffd43b'; }
-function paintArrow(ctx, x1, y1, x2, y2, { color = '#111111', dash = false, lw = 4, z = 1, text = '' } = {}) {
+function paintArrow(ctx, x1, y1, x2, y2, { color = '#111111', dash = false, lw = 4, z = 1, text = '', side = 1 } = {}) {
   const dx = x2 - x1, dy = y2 - y1;
   const len = Math.hypot(dx, dy) || 1;
   const ux = dx / len, uy = dy / len;
@@ -53,16 +53,15 @@ function paintArrow(ctx, x1, y1, x2, y2, { color = '#111111', dash = false, lw =
   ctx.fillStyle = color || '#111111';
   ctx.fill();
   if (text) {
-    const show = uprightAngle(Math.atan2(dy, dx));
-    const lx = x1 - ux * (16 * z);
-    const ly = y1 - uy * (16 * z);
-    ctx.translate(lx, ly);
-    ctx.rotate(show);
-    ctx.font = `700 ${Math.max(14, 16 * z)}px sans-serif`;
+    const font = Math.max(14, 16 * z);
+    const place = arrowLabelPlace(x1, y1, x2, y2, side, font, 4 * z);
+    ctx.translate(place.x, place.y);
+    ctx.rotate(place.ang);
+    ctx.font = `700 ${font}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     const tw = ctx.measureText(text).width + 12 * z;
-    const th = 22 * z;
+    const th = font + 6 * z;
     ctx.fillStyle = 'rgba(255,255,255,.94)';
     ctx.fillRect(-tw / 2, -th / 2, tw, th);
     ctx.fillStyle = '#111';
@@ -165,7 +164,7 @@ function paintDoc(ctx, doc, w, h, selected) {
   for (const t of doc.texts || []) paintText(ctx, t.x * w, t.y * h, t.text, t.ang || 0, Math.max(16, w / 36));
   for (const s of doc.shapes || []) {
     if (s.kind === 'arrow') {
-      paintArrow(ctx, s.x * w, s.y * h, (s.x2 ?? s.x) * w, (s.y2 ?? s.y) * h, { color: s.color, dash: !!s.dash, lw: Math.max(4, w / 140), z: Math.max(1, w / 700), text: s.text || '' });
+      paintArrow(ctx, s.x * w, s.y * h, (s.x2 ?? s.x) * w, (s.y2 ?? s.y) * h, { color: s.color, dash: !!s.dash, lw: Math.max(4, w / 140), z: Math.max(1, w / 700), text: s.text || '', side: s.side });
       continue;
     }
     ctx.beginPath();
@@ -248,6 +247,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" data-w="0.022">groß</button>
       <button type="button" id="draw-dash">gestrichelt</button>
       ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}">${c.name}</button>`).join('')}
+      <div id="arrowLabels" class="arrow-labels" hidden></div>
     </div></div>
     <pre id="drawMsg"></pre>
     <form id="drawForm" hidden>
@@ -469,12 +469,18 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const dashBtn = el.querySelector('#draw-dash');
     const dashOn = selectedShape ? !!(doc.shapes || []).find((s) => s.id === selectedShape)?.dash : selectedEdge ? edgeLook(edgeById(doc, selectedEdge) || {}).dash : lineDash;
     if (dashBtn) { dashBtn.classList.toggle('on', !!dashOn); dashBtn.textContent = dashOn ? 'gestrichelt' : 'durchgezogen'; }
+    const labelBox = el.querySelector('#arrowLabels');
+    const arrowOn = detail === 'shape' ? (doc.shapes || []).find((s) => s.id === selectedShape && s.kind === 'arrow') : null;
+    if (labelBox) {
+      labelBox.hidden = !arrowOn;
+      labelBox.innerHTML = arrowOn ? `${ARROW_LABELS.map((l) => `<button type="button" data-arrow-label="${l}" class="${arrowOn.text === l ? 'on' : ''}">${l}</button>`).join('')}<button type="button" id="btn-arrow-text" data-arrow-label="__custom">Eigener Text…</button><button type="button" data-arrow-label="__clear">ohne Text</button><button type="button" id="btn-arrow-side">Seite wechseln</button>` : '';
+    }
     el.querySelector('#drawMsg').textContent = msg;
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
       detail === 'line' && selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
-      detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? `<div class="arrow-labels">${ARROW_LABELS.map((l) => `<button type="button" data-arrow-label="${l}" class="${(doc.shapes || []).find((s) => s.id === selectedShape)?.text === l ? 'on' : ''}">${l}</button>`).join('')}<button type="button" id="btn-arrow-text" data-arrow-label="__custom">Eigener Text…</button><button type="button" data-arrow-label="__clear">ohne Text</button></div><button type="button" id="btn-del-shape" class="btn danger">Löschen</button>` : '',
+      detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? '<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>' : '',
       detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind !== 'arrow' ? '<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>' : '',
       detail === 'text' && selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
     ].join('');
@@ -504,15 +510,6 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       msg = 'Teilpunkt ziehen, um die Längen zu verschieben.';
       await refreshArea();
     };
-    el.querySelectorAll('[data-arrow-label]').forEach((b) => {
-      b.onclick = async () => {
-        const s = (doc.shapes || []).find((x) => x.id === selectedShape);
-        if (!s) return;
-        const v = b.dataset.arrowLabel;
-        if (v === '__custom') { openForm('arrow-text', s.text || ''); return; }
-        await commit(patchShape(doc, s.id, { text: v === '__clear' ? '' : v }));
-      };
-    });
     const delShape = el.querySelector('#btn-del-shape');
     if (delShape) delShape.onclick = async () => {
       const id = selectedShape;
@@ -603,7 +600,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     const drawShape = (s, selId) => {
       if (s.kind === 'arrow') {
-        paintArrow(ctx2, X(s.x), Y(s.y), X(s.x2 ?? s.x), Y(s.y2 ?? s.y), { color: s.color, dash: !!s.dash, lw: (selId === s.id ? 8 : 4) * z, z, text: s.text || '' });
+        paintArrow(ctx2, X(s.x), Y(s.y), X(s.x2 ?? s.x), Y(s.y2 ?? s.y), { color: s.color, dash: !!s.dash, lw: (selId === s.id ? 8 : 4) * z, z, text: s.text || '', side: s.side });
         return;
       }
       ctx2.beginPath();
@@ -1187,6 +1184,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-text').onclick = () => { tool = 'text'; paint(); };
   el.querySelector('#penBar').addEventListener('click', async (ev) => {
     const b = ev.target.closest('button'); if (!b) return;
+    if (b.id === 'btn-arrow-side') {
+      const s = (doc.shapes || []).find((x) => x.id === selectedShape);
+      if (s) await commit(patchShape(doc, s.id, { side: s.side === -1 ? 1 : -1 }));
+      return;
+    }
+    if (b.dataset.arrowLabel) {
+      const s = (doc.shapes || []).find((x) => x.id === selectedShape);
+      if (!s) return;
+      const v = b.dataset.arrowLabel;
+      if (v === '__custom') { openForm('arrow-text', s.text || ''); return; }
+      await commit(patchShape(doc, s.id, { text: v === '__clear' ? '' : v }));
+      return;
+    }
     if (b.id === 'draw-dash') {
       const next = !(selectedShape ? (doc.shapes || []).find((s) => s.id === selectedShape)?.dash : selectedEdge ? edgeLook(edgeById(doc, selectedEdge) || {}).dash : lineDash);
       lineDash = next;
@@ -1276,7 +1286,27 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     },
     edges: () => doc.edges.length,
     edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
-    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
+    shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', side: s.side === -1 ? -1 : 1, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
+    arrowLabels() {
+      const z = userZoom || 1;
+      const X = (nx) => view.ox + nx * view.iw * view.s;
+      const Y = (ny) => view.oy + ny * view.ih * view.s;
+      return (doc.shapes || []).filter((s) => s.kind === 'arrow' && s.text).map((s) => {
+        const x1 = X(s.x), y1 = Y(s.y), x2 = X(s.x2 ?? s.x), y2 = Y(s.y2 ?? s.y);
+        const font = Math.max(14, 16 * z);
+        const place = arrowLabelPlace(x1, y1, x2, y2, s.side, font, 4 * z);
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        return {
+          text: s.text,
+          side: s.side === -1 ? -1 : 1,
+          ang: place.ang,
+          mid: Math.hypot(place.x - mx, place.y - my),
+          tail: Math.hypot(place.x - x1, place.y - y1),
+          tip: Math.hypot(place.x - x2, place.y - y2),
+          cross: (x2 - x1) * (place.y - my) - (y2 - y1) * (place.x - mx),
+        };
+      });
+    },
     sheet: () => ({ w: view.iw || img.naturalWidth || img.width || 1, h: view.ih || img.naturalHeight || img.height || 1 }),
     toolsOpen: () => toolsOpen,
     nodes: () => doc.nodes.length,
