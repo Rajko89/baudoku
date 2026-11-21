@@ -159,6 +159,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let selectedText = null;
   let selectedShape = null;
   let selectedNode = null;
+  let detail = null;
   let arm = null;
   let ann = [];
   let msg = '';
@@ -173,6 +174,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let lastTapAt = 0;
   let lastTapX = 0;
   let lastTapY = 0;
+  let down = null;
   const title = sheet?.title || sketch?.title || 'Zeichnen';
   const el = document.createElement('div');
   el.className = 'draw';
@@ -193,6 +195,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="drawDel" class="btn danger">Löschen</button>
     </form>
     <div id="drawCtx"></div>
+    <div id="drawDock">
     <div class="draw-tools">
       <button type="button" id="draw-pen"><span>✎</span>Stift</button>
       <button type="button" id="draw-line" class="on"><span>／</span>Linie</button>
@@ -205,6 +208,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
       <button type="button" id="draw-undo"><span>↩</span>Rückgängig</button>
       ${photo ? '<button type="button" id="draw-photo"><span>▣</span><b>Foto aus</b></button>' : ''}
+      <button type="button" id="draw-fold" aria-expanded="true"><span>▾</span>Weniger</button>
+    </div>
+    <div class="draw-keep" hidden>
+      <button type="button" id="draw-unfold" aria-label="Werkzeuge einblenden"><span>▴</span>Werkzeuge</button>
+      <button type="button" id="draw-home"><span>←</span>Zurück</button>
+      <button type="button" id="draw-save">Speichern</button>
+    </div>
     </div>`;
   root.appendChild(el);
   el.querySelector('#drawTitle').textContent = title;
@@ -382,7 +392,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
     ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
     const bar = el.querySelector('#penBar');
-    const showInk = tool === 'pen' || !!selectedEdge || !!selectedShape;
+    const showInk = tool === 'pen' || detail === 'line' || detail === 'shape';
     bar.classList.toggle('on', showInk);
     bar.classList.toggle('pen', tool === 'pen');
     bar.classList.toggle('ink', tool !== 'pen');
@@ -396,9 +406,9 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
-      selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
-      selectedShape ? '<button type="button" id="btn-del-shape" class="btn danger">Form löschen</button>' : '',
-      selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
+      detail === 'line' && selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
+      detail === 'shape' && selectedShape ? '<button type="button" id="btn-del-shape" class="btn danger">Form löschen</button>' : '',
+      detail === 'text' && selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
     ].join('');
     const right = el.querySelector('#btn-right');
     if (right) right.onclick = async () => {
@@ -701,6 +711,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (hands === 'hold' || hands === 'pinch') return;
     hands = 'draw';
     const p = norm(ev);
+    down = { x: ev.clientX, y: ev.clientY, line: hitEdge(p), shape: hitShape(p), text: hitText(p) };
     const t = hitText(p);
     if (t && tool !== 'measure') {
       selectedText = t.id;
@@ -728,6 +739,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         return;
       }
       selectedEdge = e ? e.id : null;
+      detail = e ? 'line' : null;
+      if (!e) { selectedShape = null; selectedText = null; }
       if (e) { unit.value = e.measure?.unit || 'm'; openForm('measure', e.measure ? String(e.measure.value).replace('.', ',') : ''); }
       paint();
       return;
@@ -752,6 +765,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       }
       selectedEdge = edge?.id || null;
       selectedNode = null;
+      if (!edge) { detail = null; selectedShape = null; selectedText = null; }
       paint();
       return;
     }
@@ -857,7 +871,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     } else if (act.tool === 'line' || act.tool === 'free') {
       const moved = cssDist(act.x0, act.y0, act.raw[0], act.raw[1]) > 12;
       if (!moved) {
-        selectedEdge = act.hitEdge || null;
+        if (act.hitEdge) selectedEdge = act.hitEdge;
+        else { selectedEdge = null; detail = null; selectedShape = null; selectedText = null; }
         paint();
         return;
       }
@@ -871,11 +886,9 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }     else if (act.tool === 'text' && act.moved) await persist();
     else if (act.tool === 'text' && !act.moved) {
       selectedText = act.id;
-      if (tool === 'edit') paint();
-      else {
-        const t = (doc.texts || []).find((x) => x.id === act.id);
-        if (t) openForm('text-edit', t.text);
-      }
+      const t = (doc.texts || []).find((x) => x.id === act.id);
+      if (t) openForm('text-edit', t.text);
+      else paint();
     } else if (act.tool === 'symbol') {
       const p = act.raw || [act.x0, act.y0];
       if (cssDist(act.x0, act.y0, p[0], p[1]) <= 14) {
@@ -911,12 +924,32 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       return;
     }
     if (pointers.size > 0) { beginPinch(); return; }
-    const tap = active?.raw && cssDist(active.x0, active.y0, active.raw[0], active.raw[1]) <= 12;
-    if (tap && Date.now() - lastTapAt < 340 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
+    const movedPx = down ? Math.hypot(ev.clientX - down.x, ev.clientY - down.y) : 0;
+    const tap = !down || movedPx <= 14;
+    if (tap && Date.now() - lastTapAt < 360 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
+      const textHit = !down || tool === 'measure' ? null : down.text;
+      const shapeHit = !down || tool === 'pen' || tool === 'measure' ? null : down.shape;
+      const lineHit = down ? down.line : null;
       active = null;
       showSnap(null);
       hands = null;
       lastTapAt = 0;
+      if (textHit) {
+        selectedText = textHit.id; selectedEdge = null; selectedShape = null; selectedNode = null; detail = 'text';
+        openForm('text-edit', textHit.text);
+        paint();
+        return;
+      }
+      if (shapeHit) {
+        selectedShape = shapeHit.id; selectedEdge = null; selectedText = null; selectedNode = null; detail = 'shape'; paint(); return;
+      }
+      if (lineHit) {
+        selectedEdge = lineHit.id; selectedShape = null; selectedText = null; selectedNode = null; detail = 'line'; paint(); return;
+      }
+      detail = null;
+      selectedEdge = null;
+      selectedShape = null;
+      selectedText = null;
       resetZoom();
       return;
     }
@@ -964,16 +997,37 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-undo').onclick = async () => {
     if (!undo.length) return;
     doc = undo.pop();
-    selectedEdge = null;
-    selectedNode = null;
-    selectedText = null;
-    selectedShape = null;
-    ann = [];
+      selectedEdge = null;
+      selectedNode = null;
+      selectedText = null;
+      selectedShape = null;
+      detail = null;
+      ann = [];
     await persist();
     await refreshArea();
   };
   if (photoBtn) photoBtn.onclick = async () => { hidePhoto = !hidePhoto; await persist(); paint(); };
   el.querySelector('#drawBack').onclick = () => onBack();
+  const TOOLS_KEY = 'baudoku-draw-tools';
+  let toolsOpen = true;
+  try { toolsOpen = localStorage.getItem(TOOLS_KEY) !== 'closed'; } catch (e) { /* privater Modus */ }
+  function applyDock() {
+    el.querySelector('.draw-tools').hidden = !toolsOpen;
+    el.querySelector('.draw-keep').hidden = toolsOpen;
+    const fold = el.querySelector('#draw-fold');
+    if (fold) fold.setAttribute('aria-expanded', toolsOpen ? 'true' : 'false');
+  }
+  function setToolsOpen(open) {
+    toolsOpen = !!open;
+    try { localStorage.setItem(TOOLS_KEY, toolsOpen ? 'open' : 'closed'); } catch (e) { /* privater Modus */ }
+    applyDock();
+    paint();
+  }
+  el.querySelector('#draw-fold').onclick = () => setToolsOpen(false);
+  el.querySelector('#draw-unfold').onclick = () => setToolsOpen(true);
+  el.querySelector('#draw-home').onclick = () => onBack();
+  el.querySelector('#draw-save').onclick = async () => { await persist(); msg = 'Gespeichert'; paint(); };
+  applyDock();
   async function refreshArea() {
     ann = [];
     const lines = [];
@@ -1008,6 +1062,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
     shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
     sheet: () => ({ w: view.iw || img.naturalWidth || img.width || 1, h: view.ih || img.naturalHeight || img.height || 1 }),
+    toolsOpen: () => toolsOpen,
     nodes: () => doc.nodes.length,
     texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y })),
     faces: () => evaluateFaces(doc).map((f) => ({ text: f.text, x: f.x, y: f.y, ok: f.ok, free: f.free })),
