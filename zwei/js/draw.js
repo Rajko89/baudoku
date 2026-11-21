@@ -5,8 +5,9 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, setEdgeAssignment, setFaceAssignment, addPiece, setPieceAssignment, deletePiece, addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
 } from './plan.js';
+import { dimensionCaption, uniqueServices } from './catalog.js';
 
 const ARROW_LABELS = ['Kamin', 'Dachablauf', 'Notablauf', 'Wandanschluss', 'Dachrinne', 'Attika', 'Lichtkuppel', 'Entlüftung', 'Antenne', 'Gaube', 'Dachfenster'];
 const PART_NAMES = [...ARROW_LABELS, 'Blende', 'Traufe', 'Ortgang', 'First', 'Kehle', 'Grat'];
@@ -140,19 +141,31 @@ function paintDoc(ctx, doc, w, h, selected) {
     ctx.setLineDash([]);
     const mx = (a.x + b.x) / 2 * w, my = (a.y + b.y) / 2 * h;
     const ang = readable(Math.atan2((b.y - a.y) * h, (b.x - a.x) * w));
-    ctx.save(); ctx.translate(mx, my); ctx.rotate(ang);
+    ctx.save(); ctx.translate(mx + (e.labelDx || 0) * w, my + (e.labelDy || 0) * h); ctx.rotate(ang);
     ctx.font = `700 ${Math.max(14, w / 40)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.lineWidth = 4; ctx.strokeStyle = '#fff';
-    const title = edgeTitle(e);
-    if (title) { ctx.strokeText(title, 0, -10); ctx.fillStyle = '#1f2933'; ctx.fillText(title, 0, -10); }
-    const named = namedMeasure(e);
-    const m = named || (e.measure ? `${e.label} = ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}` : '');
-    if (m) {
+    const custom = e.labelMode ? dimensionCaption(e, []) : '';
+    if (custom) {
       ctx.font = `700 ${Math.max(13, w / 46)}px sans-serif`;
-      ctx.strokeStyle = '#fff'; ctx.strokeText(m, 0, 16); ctx.fillStyle = MEASURE; ctx.fillText(m, 0, 16);
+      ctx.strokeText(custom, 0, 16); ctx.fillStyle = MEASURE; ctx.fillText(custom, 0, 16);
+    } else {
+      const title = edgeTitle(e);
+      if (title) { ctx.strokeText(title, 0, -10); ctx.fillStyle = '#1f2933'; ctx.fillText(title, 0, -10); }
+      const named = namedMeasure(e);
+      const m = named || (e.measure ? `${e.label} = ${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}` : '');
+      if (m) {
+        ctx.font = `700 ${Math.max(13, w / 46)}px sans-serif`;
+        ctx.strokeStyle = '#fff'; ctx.strokeText(m, 0, 16); ctx.fillStyle = MEASURE; ctx.fillText(m, 0, 16);
+      }
     }
     ctx.restore();
+  }
+  for (const p of doc.pieces || []) {
+    ctx.beginPath(); ctx.arc(p.x * w, p.y * h, Math.max(10, w / 50), 0, 7);
+    ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3; ctx.strokeStyle = '#0b7285'; ctx.stroke();
+    ctx.fillStyle = '#0b7285'; ctx.font = `700 ${Math.max(12, w / 48)}px sans-serif`; ctx.textAlign = 'left';
+    ctx.fillText(p.name || 'Stück', p.x * w + 14, p.y * h - 8);
   }
   for (const n of doc.nodes || []) {
     const right = (doc.rights || []).some((r) => r.node === n.id);
@@ -204,7 +217,7 @@ function docFrom(photo, sheet, sketch) {
 }
 function clone(d) { return JSON.parse(JSON.stringify(d)); }
 
-export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
+export function mountDraw(root, { photo, sheet, sketch, img, onBack, catalog = [], onDoc } = {}) {
   const blank = !photo && !sketch;
   img = img || blankCanvas(sheet?.width || 1000, sheet?.height || 1400);
   const rawDoc = docFrom(photo, sheet, sketch);
@@ -220,6 +233,9 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let undo = [];
   let active = null;
   let selectedEdge = null;
+  let selectedPiece = null;
+  let selectedFace = null;
+  let assignTarget = null;
   let selectedText = null;
   let selectedShape = null;
   let selectedNode = null;
@@ -260,6 +276,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="submit" class="btn primary">OK</button>
       <button type="button" id="drawDel" class="btn danger">Löschen</button>
     </form>
+    <form id="assignBox" hidden>
+      <input id="assignName" placeholder="Bauteilname, z. B. Attika" autocomplete="off">
+      <div id="assignModes" class="arrow-labels"></div>
+      <input id="assignSearch" type="search" placeholder="Leistung suchen: Nummer oder Name" autocomplete="off">
+      <div id="assignList" class="arrow-labels"></div>
+      <label id="assignWidthWrap" hidden>Breite für m² <input id="assignWidth" inputmode="decimal" placeholder="z. B. 0,30"></label>
+      <label id="assignKindWrap" hidden>Flächenart
+        <select id="assignKind"><option value="measured">aus Maßen</option><option value="projection">Grundriss</option><option value="slope">geneigt</option></select>
+      </label>
+      <button type="submit" class="btn primary">Übernehmen</button>
+      <button type="button" id="assignNudge" class="btn">Beschriftung verschieben</button>
+      <button type="button" id="assignCancel" class="btn">Abbrechen</button>
+    </form>
     <div id="drawCtx"></div>
     <div id="drawDock">
     <div class="draw-tools">
@@ -273,6 +302,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
+      <button type="button" id="draw-piece"><span>◉</span>Stück</button>
       <button type="button" id="draw-undo"><span>↩</span>Rückgängig</button>
       ${photo ? '<button type="button" id="draw-photo"><span>▣</span><b>Foto aus</b></button>' : ''}
       <button type="button" id="draw-fold" aria-expanded="true"><span>▾</span>Weniger</button>
@@ -461,7 +491,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const zoomBtn = el.querySelector('#drawZoom');
     if (zoomBtn) zoomBtn.hidden = Math.abs(userZoom - 1) < 0.02;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
-    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle', 'arrow'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle', 'arrow', 'piece'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
     const bar = el.querySelector('#penBar');
     const showInk = tool === 'pen' || detail === 'line' || detail === 'shape';
     bar.classList.toggle('on', showInk);
@@ -492,7 +522,9 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const ctxBar = el.querySelector('#drawCtx');
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
-      detail === 'line' && selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
+      detail === 'line' && selectedEdge ? '<button type="button" id="btn-assign" class="btn">Zuordnen</button><button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
+      selectedPiece ? '<button type="button" id="btn-assign" class="btn">Zuordnen</button><button type="button" id="btn-del-piece" class="btn danger">Stück löschen</button>' : '',
+      selectedFace ? '<button type="button" id="btn-assign" class="btn">Fläche zuordnen</button>' : '',
       detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? '<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>' : '',
       detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind !== 'arrow' ? '<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>' : '',
       detail === 'text' && selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
@@ -513,6 +545,18 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       selectedEdge = null;
       await commit(deleteEdge(doc, id));
       await refreshArea();
+    };
+    const assignBtn = el.querySelector('#btn-assign');
+    if (assignBtn) assignBtn.onclick = () => {
+      if (selectedEdge) openAssign('line', edgeById(doc, selectedEdge) || {});
+      else if (selectedPiece) openAssign('piece', (doc.pieces || []).find((p) => p.id === selectedPiece) || {});
+      else if (selectedFace) openAssign('face', { ...(doc.faceMeta || {})[selectedFace], sig: selectedFace });
+    };
+    const delPiece = el.querySelector('#btn-del-piece');
+    if (delPiece) delPiece.onclick = async () => {
+      const id = selectedPiece;
+      selectedPiece = null;
+      if (id) await commit(deletePiece(doc, id));
     };
     const splitBtn = el.querySelector('#btn-split');
     if (splitBtn) splitBtn.onclick = async () => {
@@ -565,12 +609,16 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.setLineDash([]);
       const mx = (X(a.x) + X(b.x)) / 2, my = (Y(a.y) + Y(b.y)) / 2;
       const ang = readable(Math.atan2(Y(b.y) - Y(a.y), X(b.x) - X(a.x)));
-      ctx2.save(); ctx2.translate(mx, my); ctx2.rotate(ang);
+      ctx2.save(); ctx2.translate(mx + (e.labelDx || 0) * view.iw * view.s, my + (e.labelDy || 0) * view.ih * view.s); ctx2.rotate(ang);
       ctx2.font = `700 ${15 * z}px sans-serif`; ctx2.textAlign = 'center';
       ctx2.lineWidth = 4 * z; ctx2.strokeStyle = '#fff';
+      const custom = e.labelMode ? dimensionCaption(e, catalog) : '';
+      const note = ann.find((n) => n.id === e.id);
+      if (custom) {
+        ctx2.strokeText(custom, 0, 16 * z); ctx2.fillStyle = MEASURE; ctx2.fillText(custom, 0, 16 * z);
+      } else {
       const title = edgeTitle(e);
       if (title) { ctx2.strokeText(title, 0, -8 * z); ctx2.fillStyle = '#1f2933'; ctx2.fillText(title, 0, -8 * z); ctx2.strokeStyle = '#fff'; }
-      const note = ann.find((n) => n.id === e.id);
       const named = namedMeasure(e);
       if (named || (e.measure && e.measure.source !== 'derived')) {
         const m = named || `${fmtNum(e.measure.value)} ${e.measure.unit || 'm'}`;
@@ -579,7 +627,14 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         ctx2.font = `italic ${15 * z}px sans-serif`;
         ctx2.strokeText('(' + note.text + ')', 0, 16 * z); ctx2.fillStyle = '#868e96'; ctx2.fillText('(' + note.text + ')', 0, 16 * z);
       }
+      }
       ctx2.restore();
+    }
+    for (const p of d.pieces || []) {
+      ctx2.beginPath(); ctx2.arc(X(p.x), Y(p.y), 12 * z, 0, 7);
+      ctx2.fillStyle = '#fff'; ctx2.fill(); ctx2.lineWidth = 3 * z; ctx2.strokeStyle = '#0b7285'; ctx2.stroke();
+      ctx2.fillStyle = '#0b7285'; ctx2.font = `700 ${14 * z}px sans-serif`; ctx2.textAlign = 'left';
+      ctx2.fillText(p.name || 'Stück', X(p.x) + 16 * z, Y(p.y) - 8 * z);
     }
     for (const n of d.nodes || []) {
       const right = (d.rights || []).some((r) => r.node === n.id);
@@ -802,7 +857,70 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     doc = next;
     await persist();
     paint();
+    if (onDoc) onDoc(doc);
   }
+  const assignBox = el.querySelector('#assignBox');
+  function openAssign(kind, obj) {
+    const chosen = new Set(uniqueServices(obj.services).map((s) => s.catalogId));
+    assignTarget = { kind, id: obj.id || obj.sig, mode: obj.labelMode || (obj.name ? 'part' : 'letter'), nudge: obj.labelNudge || 0, chosen };
+    assignBox.hidden = false;
+    el.querySelector('#assignName').value = obj.name || '';
+    const modes = [['letter', 'Buchstabe und Maß'], ['part', 'Bauteilname und Maß'], ['short', 'Leistungskurzname und Maß'], ['both', 'Buchstabe, Name und Maß']];
+    el.querySelector('#assignModes').innerHTML = modes.map(([id, label]) => `<button type="button" data-mode="${id}" class="${assignTarget.mode === id ? 'on' : ''}">${label}</button>`).join('');
+    el.querySelector('#assignKind').value = obj.areaKind || 'measured';
+    el.querySelector('#assignKindWrap').hidden = kind !== 'face';
+    el.querySelector('#assignWidth').value = obj.widthM != null && obj.widthM !== '' ? String(obj.widthM).replace('.', ',') : '';
+    const renderList = () => {
+      const q = el.querySelector('#assignSearch').value.trim().toLowerCase();
+      const rows = (catalog || []).filter((c) => c.active !== false && (!q || `${c.nr} ${c.title} ${c.short}`.toLowerCase().includes(q)));
+      el.querySelector('#assignList').innerHTML = rows.map((c) => `<label class="chk"><input type="checkbox" data-cat="${c.id}" ${chosen.has(c.id) ? 'checked' : ''}>${c.title} · ${c.unit}</label>`).join('') || '<p>Kein Katalogeintrag. Leistungskatalog in den Einstellungen öffnen.</p>';
+      const needsWidth = kind === 'line' && [...chosen].some((id) => catalog.find((c) => c.id === id)?.unit === 'm²');
+      el.querySelector('#assignWidthWrap').hidden = !needsWidth;
+    };
+    el.querySelector('#assignSearch').oninput = renderList;
+    el.querySelector('#assignList').onchange = (ev) => {
+      const inp = ev.target.closest('[data-cat]');
+      if (!inp) return;
+      if (inp.checked) chosen.add(inp.dataset.cat); else chosen.delete(inp.dataset.cat);
+      const needsWidth = kind === 'line' && [...chosen].some((id) => catalog.find((c) => c.id === id)?.unit === 'm²');
+      el.querySelector('#assignWidthWrap').hidden = !needsWidth;
+    };
+    el.querySelector('#assignModes').onclick = (ev) => {
+      const b = ev.target.closest('[data-mode]');
+      if (!b) return;
+      assignTarget.mode = b.dataset.mode;
+      el.querySelectorAll('#assignModes button').forEach((x) => x.classList.toggle('on', x === b));
+    };
+    renderList();
+  }
+  assignBox.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!assignTarget) return;
+    const name = el.querySelector('#assignName').value;
+    const services = [...assignTarget.chosen].map((catalogId) => ({ catalogId }));
+    const labels = services.map((s) => catalog.find((c) => c.id === s.catalogId)?.short).filter(Boolean);
+    const width = parseNum(el.querySelector('#assignWidth').value);
+    if (assignTarget.kind === 'line') {
+      const edge = edgeById(doc, assignTarget.id);
+      const ang = edge ? Math.atan2(nodeById(doc, edge.b).y - nodeById(doc, edge.a).y, nodeById(doc, edge.b).x - nodeById(doc, edge.a).x) + Math.PI / 2 : 0;
+      const n = assignTarget.nudge || 0;
+      let next = setEdgeAssignment(doc, assignTarget.id, { name, services, labelMode: assignTarget.mode, widthM: el.querySelector('#assignWidth').value.trim() ? width : '', labelDx: Math.cos(ang) * n * 0.04, labelDy: Math.sin(ang) * n * 0.04 });
+      const saved = next.edges.find((e) => e.id === assignTarget.id);
+      if (saved) { saved.serviceLabels = labels; saved.labelNudge = n; }
+      await commit(next);
+      toastAssign('Zuordnung gespeichert');
+    } else if (assignTarget.kind === 'face') {
+      await commit(setFaceAssignment(doc, assignTarget.id, { name, services, labelMode: assignTarget.mode, areaKind: el.querySelector('#assignKind').value }));
+      toastAssign('Fläche zugeordnet');
+    } else if (assignTarget.kind === 'piece') {
+      await commit(setPieceAssignment(doc, assignTarget.id, { name, services }));
+      toastAssign('Stückobjekt gespeichert');
+    }
+    assignBox.hidden = true;
+  });
+  function toastAssign(text) { msg = text; paint(); }
+  el.querySelector('#assignCancel').onclick = () => { assignBox.hidden = true; };
+  el.querySelector('#assignNudge').onclick = () => { if (assignTarget) assignTarget.nudge = ((assignTarget.nudge || 0) + 1) % 5 - 2; msg = 'Beschriftung wird beim Übernehmen versetzt.'; };
   function openForm(mode, value) {
     const gen = ++formGen;
     form.hidden = false;
@@ -938,8 +1056,19 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       selectedText = null; form.dataset.pos = JSON.stringify(p); openForm('text-new', '');
       return;
     }
+    if (tool === 'piece') {
+      const hit = (doc.pieces || []).find((pc) => Math.hypot(pc.x - p[0], pc.y - p[1]) < 0.045);
+      if (hit) { selectedPiece = hit.id; selectedEdge = null; selectedFace = null; detail = null; openAssign('piece', hit); paint(); return; }
+      commit(addPiece(doc, p[0], p[1], '')).then(() => {
+        const created = doc.pieces[doc.pieces.length - 1];
+        selectedPiece = created?.id || null;
+        if (created) openAssign('piece', created);
+      });
+      return;
+    }
     const face = hitFace(p);
     if (face) {
+      selectedFace = face.sig;
       active = { tool: 'face', sig: face.sig, x: p[0], y: p[1], dx: 0, dy: 0, moved: false, pole: { x: face.x, y: face.y } };
       const evu = face.ev;
       ann = evu.edgeNotes || [];
@@ -1252,6 +1381,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   });
   el.querySelector('#draw-measure').onclick = () => { tool = 'measure'; paint(); };
   el.querySelector('#draw-area').onclick = () => { tool = 'area'; paint(); };
+  el.querySelector('#draw-piece').onclick = () => { tool = 'piece'; paint(); };
   el.querySelector('#draw-undo').onclick = async () => {
     if (!undo.length) return;
     doc = undo.pop();
@@ -1332,7 +1462,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       });
     },
     edges: () => doc.edges.length,
-    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, name: e.name || '', title: edgeTitle(e), measureText: namedMeasure(e), x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
+    edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, name: e.name || '', title: edgeTitle(e), measureText: namedMeasure(e), caption: e.labelMode ? dimensionCaption(e, catalog) : '', x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
     shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', side: s.side === -1 ? -1 : 1, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
     arrowLabels() {
       const z = userZoom || 1;

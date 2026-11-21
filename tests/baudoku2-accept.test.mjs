@@ -176,7 +176,8 @@ test('J die Haupt-App bleibt auf v1.7.7', () => {
   assert.doesNotMatch(mainSw, /v1\.8\.0/);
   assert.doesNotMatch(mainApp, /cat-seed-01/);
   assert.doesNotMatch(mainApp, /Leistungskatalog/);
-  assert.match(zweiSw, /baudoku2-v1\.8\.0|baudoku2-v1\.7\.7/);
+  assert.match(zweiSw, /baudoku2-v1\.8\.0/);
+  assert.doesNotMatch(zweiSw, /baudoku-v1\.7\.7/);
 });
 
 test('K finalisierter Stand bleibt, die Überarbeitung ist neu', () => {

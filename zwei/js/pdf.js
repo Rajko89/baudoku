@@ -6,6 +6,7 @@ import { measureValue, realMapper } from './geom.js';
 import { renderSketch } from './sketch.js';
 import { renderDoc, blankCanvas } from './draw.js';
 import { importLegacyStrokes, evaluateCycle, findCycles, partSummary } from './plan.js';
+import { totals, effectiveQty, lineNet, fmtEUR, fmtQty } from './catalog.js';
 import { computeFace, formatCalcText, scaleWarning } from './sketch-calc.js';
 
 const M = 15, PW = 210, PH = 297, CW = PW - 2 * M;
@@ -208,5 +209,62 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
     doc.text(`${project.name}${project.bvnr ? ' · BV ' + project.bvnr : ''}${settings.firma ? ' · ' + settings.firma : ''}`.slice(0, 110), M, PH - 7);
     doc.text(`Seite ${i} von ${n}`, PW - M, PH - 7, { align: 'right' });
   }
+  return doc.output('blob');
+}
+
+export async function buildOfferPdf({ project, offer, withMeasures = false }) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: 'mm', format: 'a4', compress: true });
+  const final = offer.status === 'final' && offer.snapshot;
+  const head = final ? offer.snapshot.header : offer.header;
+  const rate = final ? offer.snapshot.vatRate : offer.vatRate;
+  const items = final ? offer.snapshot.items : (offer.items || []).filter((i) => i.state === 'included').map((i) => ({ ...i, qty: effectiveQty(i), net: lineNet(i) }));
+  const sum = final ? offer.snapshot : totals(offer);
+  let y = M;
+  const need = (h) => { if (y + h > PH - 18) { doc.addPage(); y = M; } };
+  if (!final) {
+    doc.setFillColor(232, 89, 12); doc.rect(0, 0, PW, 10, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+    doc.text('ENTWURF – nicht finalisiert', M, 7);
+    y = 16;
+  }
+  doc.setTextColor(20, 24, 29); doc.setFont('helvetica', 'bold'); doc.setFontSize(16);
+  doc.text(head.betreff || `Angebot ${project?.name || ''}`.trim(), M, y + 6); y += 12;
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+  const lines = [
+    head.firma && `Anbieter: ${head.firma}`,
+    head.kunde && `Kunde: ${head.kunde}`,
+    head.anschrift && `Anschrift: ${head.anschrift}`,
+    [head.nummer && `Nr. ${head.nummer}`, head.datum && `Datum ${head.datum}`, head.gueltig && `gültig bis ${head.gueltig}`].filter(Boolean).join(' · '),
+  ].filter(Boolean);
+  lines.forEach((line) => { doc.text(String(line).slice(0, 140), M, y); y += 5; });
+  if (head.intro) { y += 2; doc.splitTextToSize(head.intro, CW).forEach((l) => { need(5); doc.text(l, M, y); y += 4.5; }); }
+  y += 3;
+  doc.setFillColor(31, 41, 51); doc.rect(M, y, CW, 8, 'F');
+  doc.setTextColor(255, 255, 255); doc.setFont('helvetica', 'bold'); doc.setFontSize(9);
+  doc.text('Pos.', M + 2, y + 5.4); doc.text('Leistung', M + 16, y + 5.4); doc.text('Menge', M + 108, y + 5.4); doc.text('EP', M + 132, y + 5.4); doc.text('GP', M + 162, y + 5.4);
+  y += 10; doc.setTextColor(20, 24, 29); doc.setFont('helvetica', 'normal');
+  items.forEach((it, i) => {
+    const text = doc.splitTextToSize(it.text || '', CW);
+    const h = 12 + text.length * 4;
+    need(h);
+    doc.setFont('helvetica', 'bold'); doc.text(String(i + 1).padStart(2, '0'), M + 2, y);
+    doc.text(`${it.title || it.short || ''}`.slice(0, 48), M + 16, y);
+    doc.text(`${fmtQty(it.qty, it.unit)} ${it.unit || ''}`, M + 108, y);
+    doc.text(fmtEUR(it.price || 0), M + 132, y);
+    doc.text(fmtEUR(it.net || 0), M + 162, y);
+    y += 5; doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+    text.forEach((l) => { doc.text(l, M + 16, y); y += 4; });
+    if (withMeasures && it.formula) { doc.setFontSize(8); doc.text(doc.splitTextToSize(it.formula, CW - 16), M + 16, y); y += 8; }
+    y += 2; doc.setFontSize(9);
+  });
+  y += 4; need(24);
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(11);
+  doc.text(`Nettosumme ${fmtEUR(sum.net)}`, M, y); y += 6;
+  doc.text(`Umsatzsteuer ${String(rate).replace('.', ',')} % ${fmtEUR(sum.vat)}`, M, y); y += 6;
+  doc.text(`Bruttosumme ${fmtEUR(sum.gross)}`, M, y); y += 8;
+  doc.setFont('helvetica', 'italic'); doc.setFontSize(8);
+  doc.text('Ein einheitlicher Umsatzsteuersatz. Die App prüft nicht, ob dieser Satz für den Auftrag rechtlich zutrifft. Keine Rabatte oder Verschnitt sind eingerechnet.', M, y, { maxWidth: CW });
+  if (head.outro) { y += 12; doc.setFont('helvetica', 'normal'); doc.setFontSize(10); doc.splitTextToSize(head.outro, CW).forEach((l) => { doc.text(l, M, y); y += 4.5; }); }
   return doc.output('blob');
 }

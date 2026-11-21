@@ -76,7 +76,7 @@ export function dimensionCaption(edge, catalog) {
     ? `${fmtNum(edge.measure.value)} ${edge.measure.unit || 'm'}` : '';
   const letter = edge.label || '';
   const part = cleanPartName(edge.name);
-  const shorts = serviceIds(edge).map((id) => map.get(id)?.short).filter(Boolean);
+  const shorts = (edge.serviceLabels || []).length ? edge.serviceLabels : serviceIds(edge).map((id) => map.get(id)?.short).filter(Boolean);
   const mode = edge.labelMode;
   if (mode === 'letter') return [letter, measure].filter(Boolean).join(' ');
   if (mode === 'part') return [part || letter, measure].filter(Boolean).join(' · ');
@@ -193,7 +193,8 @@ export function syncServiceRows(rows, groups) {
       short: g.short,
       menge: g.total,
       einheit: g.unit,
-      expr: g.formula,
+      expr: fmtQty(g.total, g.unit),
+      formula: g.formula,
       sources: g.entries,
       basis: g.basis,
       areaKind: g.areaKind,
@@ -204,7 +205,7 @@ export function syncServiceRows(rows, groups) {
   }
   for (const old of prev) {
     if (groups.some((g) => g.key === old.serviceKey)) continue;
-    next.push({ ...old, menge: 0, entfallen: true, expr: `${old.bez || 'Leistung'}: entfallen, keine zugeordnete Menge mehr`, sources: [] });
+    next.push({ ...old, menge: 0, entfallen: true, expr: '0', formula: `${old.bez || 'Leistung'}: entfallen, keine zugeordnete Menge mehr`, sources: [] });
   }
   return [...manual, ...next];
 }

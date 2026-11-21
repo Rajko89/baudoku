@@ -6,7 +6,8 @@ const ext = t => (t && t.includes('png') ? 'png' : t && t.includes('webp') ? 'we
 
 export async function exportZip(projectIds) {
   const zip = new window.JSZip();
-  const out = { format: 'baudoku-backup', version: 3, exported: new Date().toISOString(), projects: [], photos: [], notes: [], aufmass: [], sketches: [], sheets: [] };
+  const out = { format: 'baudoku-backup', version: 4, exported: new Date().toISOString(), projects: [], photos: [], notes: [], aufmass: [], sketches: [], sheets: [], offers: [], catalog: [] };
+  try { out.catalog = await db.all('catalog'); } catch (e) { out.catalog = []; }
   for (const pid of projectIds) {
     const p = await db.get('projects', pid); if (!p) continue; out.projects.push(p);
     for (const ph of await db.byProject('photos', pid)) {
@@ -22,6 +23,7 @@ export async function exportZip(projectIds) {
       out.sketches.push(meta);
     }
     out.sheets.push(...await db.byProject('sheets', pid));
+    try { out.offers.push(...await db.byProject('offers', pid)); } catch (e) { /* ältere Datenbank ohne Angebote */ }
   }
   zip.file('data.json', JSON.stringify(out, null, 1));
   return zip.generateAsync({ type: 'blob', compression: 'STORE', mimeType: 'application/zip' });
@@ -56,8 +58,13 @@ export async function importFile(file) {
       await db.put('sketches', rec);
     }
     for (const sh of (data.sheets || []).filter(x => x.projectId === p.id)) await db.put('sheets', { ...sh, id: nid(sh.id), projectId: proj.id });
+    for (const ofr of (data.offers || []).filter(x => x.projectId === p.id)) await db.put('offers', { ...ofr, id: nid(ofr.id), projectId: proj.id });
     if (proj.coverPhotoId) proj.coverPhotoId = nid(proj.coverPhotoId);
     await db.put('projects', proj); n++;
+  }
+  for (const c of data.catalog || []) {
+    const prev = await db.get('catalog', c.id);
+    if (!prev) await db.put('catalog', c);
   }
   return n;
 }

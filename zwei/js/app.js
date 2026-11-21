@@ -5,14 +5,15 @@ import { startGeo, stopGeo, getFix, onGeo, geoState, reverseGeocode, processImag
 import { readExif } from './exif.js';
 import { emptyMeasure, measureValue } from './geom.js';
 import { mountEditor, rectify, fmtVal } from './measure.js';
-import { buildPdf } from './pdf.js';
+import { buildPdf, buildOfferPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
 import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, partSummary } from './plan.js';
+import { mergeSeed, quantitiesFromDocs, syncServiceRows, blankOffer, refreshOffer, includeSuggested, setItemState, patchItem, adoptCatalog, writeBackCatalog, setManualQty, addManualItem, moveItem, finalizeOffer, reviseOffer, uncheckedTestPrices, totals, fmtEUR, fmtQty, effectiveQty, lineNet } from './catalog.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku2-v1.7.7';
+const APP_VERSION = 'baudoku2-v1.8.0';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -30,7 +31,36 @@ window.__baudoku = { db };
 /* ---------- Router ---------- */
 function parseHash() { const h = location.hash.slice(1) || '/'; const [p, q] = h.split('?'); return { parts: p.split('/').filter(Boolean), q: new URLSearchParams(q || '') }; }
 export const go = h => { if (location.hash === h) route(); else location.hash = h; };
+async function ensureCatalog() {
+  const cur = await db.all('catalog');
+  if (await db.getSetting('catalogSeeded', false)) return cur;
+  const next = mergeSeed(cur);
+  for (const item of next) if (!cur.some((c) => c.id === item.id)) await db.put('catalog', item);
+  await db.setSetting('catalogSeeded', true);
+  return db.all('catalog');
+}
+async function projectDocs(pid) {
+  const [sheets, sketches, photos] = await Promise.all([db.byProject('sheets', pid), db.byProject('sketches', pid), db.byProject('photos', pid)]);
+  return [
+    ...sheets.map((s) => ({ id: s.id, title: s.title || 'Blatt', doc: s.doc || {} })),
+    ...sketches.map((s) => ({ id: s.id, title: s.title || 'Skizze', doc: s.doc || {} })),
+    ...photos.filter((p) => p.markup?.doc).map((p) => ({ id: p.id, title: p.caption || 'Foto', doc: p.markup.doc })),
+  ];
+}
+async function syncServices(pid) {
+  const [docs, catalog, rows] = await Promise.all([projectDocs(pid), db.all('catalog'), db.byProject('aufmass', pid)]);
+  const { groups } = quantitiesFromDocs(docs, catalog);
+  const next = syncServiceRows(rows, groups);
+  for (const r of next) {
+    if (!r.catalogId) continue;
+    r.projectId = pid;
+    if (!r.order) r.order = Date.now();
+    await db.put('aufmass', r);
+  }
+  return { groups, catalog };
+}
 async function route() {
+  await ensureCatalog();
   cleanup.forEach(f => { try { f(); } catch (e) { } }); cleanup = [];
   while (urls.length) URL.revokeObjectURL(urls.pop());
   $('#modal-root').innerHTML = '';
@@ -39,6 +69,7 @@ async function route() {
     if (!parts.length) return await viewList();
     if (parts[0] === 'new') return await viewEditProject(null);
     if (parts[0] === 'settings') return await viewSettings();
+    if (parts[0] === 'katalog') return await viewCatalog();
     if (parts[0] === 'p' && parts[2] === 'edit') return await viewEditProject(parts[1]);
     if (parts[0] === 'p') return await viewProject(parts[1], q.get('tab') || 'photos', q);
     if (parts[0] === 'photo') return await viewPhoto(parts[1]);
@@ -69,7 +100,8 @@ async function viewList() {
   notes.forEach(n => (cnt[n.projectId] ||= { p: 0, n: 0 }).n++);
   APP.innerHTML = header('Baudoku 2', { sub: 'Version 2 · Projekte', right: `<button class="ib" data-nav="#/settings" aria-label="Einstellungen">⚙</button>` }) +
     `<main><div class="search"><input class="inp" id="q" type="search" placeholder="Projekt, Kunde, Adresse, BV-Nr. suchen" autocomplete="off"></div>
-    <div class="plist" id="plist"></div></main><button class="btn primary fab" data-nav="#/new">＋ Neues Projekt</button>`;
+    <div class="plist" id="plist"></div>
+    <button class="btn block" data-nav="#/katalog" style="margin:12px 0 70px">Leistungskatalog</button></main><button class="btn primary fab" data-nav="#/new">＋ Neues Projekt</button>`;
   const render = () => {
     const q = $('#q').value.trim().toLowerCase();
     const list = projects.filter(p => !q || [p.name, p.kunde, p.adresse, p.bvnr, p.notiz].join(' ').toLowerCase().includes(q));
@@ -234,7 +266,7 @@ async function viewProject(pid, tab, q) {
   photos.sort((a, b) => a.time - b.time || a.created - b.created); notes.sort((a, b) => b.created - a.created); am.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   const no = new Map(photos.map((x, i) => [x.id, i + 1]));
   const drawnPhotos = photos.filter((p) => p.markup?.doc || (p.markup?.strokes || []).length).length;
-  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['sketches', '✏️', 'Skizze', drawnPhotos + sheets.length + sketches.length], ['export', '📄', 'Export', '']];
+  const tabs = [['photos', '📷', 'Fotos', photos.length], ['notes', '📝', 'Notizen', notes.length], ['aufmass', '📐', 'Aufmaß', am.length], ['sketches', '✏️', 'Skizze', drawnPhotos + sheets.length + sketches.length], ['angebot', '€', 'Angebot', ''], ['export', '📄', 'Export', '']];
   APP.innerHTML = header(p.name, { back: '#/', sub: [p.kunde, p.adresse].filter(Boolean).join(' · ') || (p.bvnr ? 'BV ' + p.bvnr : ''), right: `<button class="ib" data-nav="#/p/${pid}/edit" aria-label="Bearbeiten">✎</button>` }) +
     `<main id="tab"></main><nav class="tabs">${tabs.map(([k, i, l, c]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}"><span>${i}</span>${l}${c !== '' ? ` (${c})` : ''}</button>`).join('')}</nav>`;
   $$('.tabs button').forEach(b => b.onclick = () => history.replaceState(null, '', `#/p/${pid}?tab=${b.dataset.tab}`) || route());
@@ -280,6 +312,8 @@ async function viewProject(pid, tab, q) {
   }
 
   if (tab === 'aufmass') {
+    if (viewProject._fresh !== pid + ':aufmass') { viewProject._fresh = pid + ':aufmass'; await syncServices(pid); return route(); }
+    viewProject._fresh = '';
     const units = `<datalist id="units">${UNITS.map(u => `<option value="${u}">`).join('')}</datalist>`;
     const row = (r, i) => { const ph = photos.find(x => x.id === r.photoId); const it = ph?.measure?.items?.find(x => x.id === r.itemId);
       return `<div class="am-row" data-id="${r.id}"><input class="inp" data-k="pos" value="${esc(r.pos)}" aria-label="Position">
@@ -288,11 +322,13 @@ async function viewProject(pid, tab, q) {
       <input class="inp" data-k="einheit" list="units" value="${esc(r.einheit)}" placeholder="Einheit" aria-label="Einheit">
       <button class="ib" data-mv="-1" aria-label="nach oben">↑</button><button class="ib" data-mv="1" aria-label="nach unten">↓</button><button class="ib" data-del aria-label="Löschen">🗑</button></div>
       <div class="src">= <b data-res>${r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : '–'}</b> ${esc(r.einheit || '')}${ph ? ` · aus <a href="#/measure/${ph.id}">Foto ${no.get(ph.id)}${it ? ' – ' + esc(it.name) : ''}</a>${r.manual ? ' (manuell geändert)' : ''}` : ''}${r.sketchId ? ` · <a href="#/sketch/${r.sketchId}">Skizze${r.calc?.faceLabel ? ' ' + esc(r.calc.faceLabel) : ''}</a>` : ''}${String(r.einheit || '').trim() === 'm²' && r.menge != null && r.menge !== '' && isFinite(+r.menge) ? ` · <label class="chk" style="display:inline-flex;min-height:0"><input type="checkbox" data-pick value="${esc(r.id)}"> zur Auswahl</label>` : ''}</div>
-      ${r.calc ? `<pre class="calc">${esc(formatCalcText({ pos: r.pos, name: r.bez, calc: r.calc }))}</pre>` : ''}</div>`; };
-    const sums = partSummary(am);
+      ${r.formula ? `<pre class="calc">${esc(r.formula)}</pre>` : ''}${r.entfallen ? '<p class="small">entfallen – Menge 0</p>' : ''}${r.calc ? `<pre class="calc">${esc(formatCalcText({ pos: r.pos, name: r.bez, calc: r.calc }))}</pre>` : ''}</div>`; };
+    const sums = partSummary(am.filter((r) => !r.catalogId));
+    const serviceRows = am.filter((r) => r.catalogId && !r.entfallen && r.formula);
+    const serviceHtml = serviceRows.length ? `<section class="part-sum"><h3>Zusammenfassung nach Leistung</h3>${serviceRows.map((s) => `<p>${esc(s.formula)}</p>`).join('')}</section>` : '';
     const sumHtml = sums.length ? `<section class="part-sum"><h3>Zusammenfassung nach Bauteil</h3>${sums.map((s) => `<p>${esc(s.text)}</p>`).join('')}</section>` : '';
     T.innerHTML = `${units}<div id="amlist">${am.map(row).join('') || '<div class="empty">Noch keine Positionen. Manuell anlegen, im Foto messen oder in der Skizze rechnen.</div>'}</div>
-      ${sumHtml}
+      ${serviceHtml}${sumHtml}
       <div class="grid2"><button class="btn primary" id="amAdd">＋ Position</button><button class="btn" id="amSketch">📐 Aus Skizzen</button></div>
       <div id="skImp"></div>
       <button class="btn block" id="amSum" style="margin-top:8px">Gesamtfläche aus Auswahl</button>
@@ -337,6 +373,107 @@ async function viewProject(pid, tab, q) {
       <div id="skList">${sketches.map(s => `<div class="card" data-nav="#/sketch/${s.id}"><div class="meta"><div class="t">${esc(s.title || 'Flächenskizze')}</div><div class="small">${(s.faces || []).length} Flächen · ${(s.edges || []).length} Kanten</div></div></div>`).join('') || '<p class="small">Keine ältere Flächenskizze.</p>'}</div>`;
     $('#editPhotos').onclick = () => go(`#/p/${pid}?tab=photos`);
     $('#newSheet').onclick = () => newSheet(pid);
+  }
+
+  if (tab === 'angebot') {
+    const { groups, catalog } = await syncServices(pid);
+    const offers = await db.byProject('offers', pid);
+    let draft = offers.find((o) => o.status !== 'final') || null;
+    const frozen = offers.filter((o) => o.status === 'final').sort((a, b) => String(b.snapshot?.at || '').localeCompare(String(a.snapshot?.at || '')))[0];
+    let changes = [];
+    if (!draft && !frozen) draft = blankOffer(pid);
+    if (draft) {
+      const refreshed = refreshOffer(draft, groups, catalog);
+      draft = refreshed.offer; draft.projectId = pid; changes = refreshed.changes;
+      await db.put('offers', draft);
+    }
+    const shown = draft || frozen;
+    const live = shown.status !== 'final';
+    const sum = live ? totals(shown) : shown.snapshot;
+    const head = shown.header || {};
+    const items = (live ? shown.items : shown.snapshot.items).slice().sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    T.innerHTML = `<div class="card"><h3 style="margin:0 0 6px">Angebot ${live ? '· Entwurf' : '· finalisiert'}</h3>
+      <p class="small">Ein einheitlicher Umsatzsteuersatz, voreingestellt 19 %. Das ist keine Aussage, dass 19 % für diesen Auftrag rechtlich gelten. Keine stillen Rabatte oder Verschnitt.</p>
+      ${changes.length ? `<p class="small"><b>Geändert:</b> ${esc(changes.join(' · '))}</p>` : ''}
+      ${frozen && draft ? `<p class="small">Ein finaler Stand vom ${esc(frozen.snapshot.at)} bleibt unverändert.</p>` : ''}
+      </div>
+      <form class="card" id="oh">
+        <label class="f">Anbieter, frei<input name="firma" value="${esc(head.firma || '')}" placeholder="leer lassen oder selbst eintragen"></label>
+        <label class="f">Kunde<input name="kunde" value="${esc(head.kunde || '')}"></label>
+        <label class="f">Anschrift<input name="anschrift" value="${esc(head.anschrift || p.adresse || '')}"></label>
+        <div class="grid2"><label class="f">Angebotsnummer<input name="nummer" value="${esc(head.nummer || '')}"></label><label class="f">Datum<input name="datum" type="date" value="${esc(head.datum || '')}"></label></div>
+        <label class="f">Betreff<input name="betreff" value="${esc(head.betreff || '')}"></label>
+        <label class="f">Einleitung<textarea name="intro">${esc(head.intro || '')}</textarea></label>
+        <label class="f">Schlusstext<textarea name="outro">${esc(head.outro || '')}</textarea></label>
+        <label class="f">Gültig bis<input name="gueltig" type="date" value="${esc(head.gueltig || '')}"></label>
+        <label class="f">Umsatzsteuer %<input name="vat" inputmode="decimal" value="${esc(String(shown.vatRate ?? 19).replace('.', ','))}"></label>
+        ${live ? '<button class="btn primary" type="submit">Kopf speichern</button>' : ''}
+      </form>
+      ${items.map((it) => `<article class="card" data-item="${esc(it.id)}"><h3 style="margin:0">${esc(it.title || it.short)} <span class="small">${esc(it.state || 'included')}</span></h3>
+        ${live ? `<label class="f">Kurzbezeichnung<input data-k="short" value="${esc(it.short || '')}"></label><label class="f">Einheitspreis netto<input data-k="price" inputmode="decimal" value="${esc(String(it.price ?? '').replace('.', ','))}"></label>` : `<p>${esc(fmtEUR(it.price || 0))} / ${esc(it.unit || '')}</p>`}
+        <p><b>${esc(fmtQty(live ? effectiveQty(it) : it.qty, it.unit))} ${esc(it.unit || '')}</b> · ${esc(fmtEUR(live ? lineNet(it) : (it.net || 0)))}</p>
+        <details><summary>Leistungstext und Herleitung</summary><p>${esc(it.text || '')}</p><pre class="calc">${esc(it.formula || '')}</pre>
+        ${(it.sources || []).map((s) => `<p class="small">${esc(s.label || s.partName || '')}</p>`).join('')}
+        ${it.qtyMode === 'manual' ? `<p class="small">Manuelle Menge. Aufmaß: ${esc(fmtQty(it.linkedQty || 0, it.unit))} ${esc(it.unit || '')}</p>` : ''}</details>
+        ${live ? `<div class="grid2"><button class="btn" data-act="include">Übernehmen</button><button class="btn" data-act="exclude">Ausschließen</button></div>
+        <div class="grid2"><button class="btn" data-act="manual">Manuelle Menge</button><button class="btn" data-act="up">nach oben</button></div>
+        <div class="grid2"><button class="btn" data-act="adopt">Katalog jetzt übernehmen</button><button class="btn" data-act="back">In den Katalog schreiben</button></div>` : ''}
+      </article>`).join('') || '<p>Noch keine Leistungen aus der Skizze.</p>'}
+      <section class="part-sum"><h3>Summen</h3><p>Netto ${esc(fmtEUR(sum.net))}</p><p>Umsatzsteuer ${esc(String(sum.rate ?? sum.vatRate ?? shown.vatRate))} % ${esc(fmtEUR(sum.vat))}</p><p>Brutto ${esc(fmtEUR(sum.gross))}</p></section>
+      ${live ? '<button class="btn block" id="takeAll">Alle Vorschläge übernehmen</button><button class="btn block" id="addManual">Manuelle Position</button><button class="btn primary block" id="doFinal">Angebot finalisieren</button>' : '<button class="btn primary block" id="doRevise">Neue Version zur Überarbeitung</button>'}
+      <label class="chk"><input type="checkbox" id="withM"> Aufmaßherleitung anhängen</label>
+      <button class="btn block" id="doPdf">PDF ausgeben</button>`;
+    const persist = async (next) => { next.projectId = pid; await db.put('offers', next); route(); };
+    if (live) {
+      $('#oh').onsubmit = async (ev) => {
+        ev.preventDefault();
+        const f = ev.target;
+        const vat = parseNum(f.vat.value);
+        draft.header = { firma: f.firma.value.trim(), kunde: f.kunde.value.trim(), anschrift: f.anschrift.value.trim(), nummer: f.nummer.value.trim(), datum: f.datum.value, betreff: f.betreff.value.trim(), intro: f.intro.value.trim(), outro: f.outro.value.trim(), gueltig: f.gueltig.value };
+        if (isFinite(vat)) draft.vatRate = vat;
+        await persist(draft);
+      };
+      $$('[data-item]').forEach((box) => {
+        const id = box.dataset.item;
+        box.querySelector('[data-k="short"]')?.addEventListener('change', async (e) => persist(patchItem(draft, id, { short: e.target.value.trim() })));
+        box.querySelector('[data-k="price"]')?.addEventListener('change', async (e) => { const n = parseNum(e.target.value); if (!isFinite(n)) return toast('Preis ungültig'); persist(patchItem(draft, id, { price: n })); });
+        box.querySelector('[data-act="include"]').onclick = () => persist(setItemState(draft, id, 'included'));
+        box.querySelector('[data-act="exclude"]').onclick = () => persist(setItemState(draft, id, 'excluded'));
+        box.querySelector('[data-act="up"]').onclick = () => persist(moveItem(draft, id, -1));
+        box.querySelector('[data-act="manual"]').onclick = async () => {
+          const cur = draft.items.find((i) => i.id === id);
+          const r = await modal({ title: 'Manuelle Angebotsmenge', html: `<p class="small">Aufmaßmenge bleibt ${esc(fmtQty(cur.linkedQty || 0, cur.unit))} ${esc(cur.unit || '')} und wird nicht in die Skizze zurückgeschrieben.</p>`, fields: [{ name: 'qty', label: 'Angebotsmenge', value: String(effectiveQty(cur)).replace('.', ','), inputmode: 'decimal' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Übernehmen', value: 'ok', cls: 'primary' }] });
+          if (!r) return; const n = parseNum(r.qty); if (!isFinite(n)) return toast('Menge ungültig'); persist(setManualQty(draft, id, n));
+        };
+        box.querySelector('[data-act="adopt"]').onclick = async () => { if (!await confirmDlg('Katalog übernehmen?', 'Kurztext, Text und Preis dieser Position werden aus dem Katalog ersetzt.', 'Übernehmen', 'primary')) return; persist(adoptCatalog(draft, id, catalog)); };
+        box.querySelector('[data-act="back"]').onclick = async () => {
+          if (!await confirmDlg('In den Katalog schreiben?', 'Der zentrale Katalog wird mit dem Text und Preis dieser Position überschrieben.', 'Zurückschreiben', 'primary')) return;
+          const item = draft.items.find((i) => i.id === id);
+          for (const c of writeBackCatalog(catalog, item)) if (c.id === item.catalogId) await db.put('catalog', c);
+          toast('Katalog aktualisiert');
+        };
+      });
+      $('#takeAll').onclick = () => persist(includeSuggested(draft));
+      $('#addManual').onclick = async () => {
+        const r = await modal({ title: 'Manuelle Position', fields: [{ name: 'short', label: 'Kurzbezeichnung' }, { name: 'text', label: 'Text', type: 'textarea' }, { name: 'unit', label: 'Einheit', value: 'psch' }, { name: 'qty', label: 'Menge', value: '1', inputmode: 'decimal' }, { name: 'price', label: 'Einheitspreis netto', inputmode: 'decimal' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Anlegen', value: 'ok', cls: 'primary' }] });
+        if (!r) return; persist(addManualItem(draft, { short: r.short, text: r.text, unit: r.unit, qty: parseNum(r.qty), price: parseNum(r.price) || 0 }));
+      };
+      $('#doFinal').onclick = async () => {
+        const warn = uncheckedTestPrices(draft);
+        if (warn.length && !await confirmDlg('Testpreise', `Noch ungeprüft: ${warn.join(', ')}. Trotzdem finalisieren?`, 'Finalisieren', 'primary')) return;
+        if (!await confirmDlg('Finalisieren?', 'Dieser Stand wird unveränderlich. Ein Export allein finalisiert nicht.', 'Finalisieren', 'primary')) return;
+        await persist(finalizeOffer(draft));
+      };
+    } else {
+      $('#doRevise').onclick = async () => { const next = reviseOffer(frozen); next.projectId = pid; await db.put('offers', next); route(); };
+    }
+    $('#doPdf').onclick = async () => {
+      const warn = uncheckedTestPrices(live ? draft : { items: frozen.snapshot.items.map((i) => ({ ...i, state: 'included' })) });
+      if (warn.length && !await confirmDlg('Testpreise', `Noch ungeprüft: ${warn.join(', ')}. Der Hinweis erscheint nicht im PDF. Trotzdem ausgeben?`, 'PDF erstellen', 'primary')) return;
+      const blob = await buildOfferPdf({ project: p, offer: live ? draft : frozen, withMeasures: $('#withM').checked });
+      window.__baudoku.lastPdf = blob;
+      showFileActions($('#doPdf').parentElement, blob, `Angebot_${safeName(p.name)}_${isoDate()}.pdf`, 'Angebot');
+    };
   }
 
   if (tab === 'export') {
@@ -470,6 +607,57 @@ async function viewMeasure(id) {
 
 /* ---------- Einstellungen ---------- */
 let installEvt = null; window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; });
+async function viewCatalog() {
+  const backupOk = await db.getSetting('migrationBackupOk', false);
+  const draw = async () => {
+    const items = (await db.all('catalog')).sort((a, b) => String(a.nr).localeCompare(String(b.nr), 'de', { numeric: true }));
+    const q = ($('#catQ')?.value || '').trim().toLowerCase();
+    const shown = items.filter((c) => !q || `${c.nr} ${c.title} ${c.short} ${c.text}`.toLowerCase().includes(q));
+    APP.innerHTML = header('Leistungskatalog', { back: '#/', sub: 'Baudoku 2' }) + `<main>
+      <div class="card"><strong>Testkatalog – Preise vor Verwendung prüfen</strong><p class="small">Zehn Startpositionen, grob geschätzte Netto-Testpreise. Keine Marktpreise und kein Kundentext. ${backupOk ? 'Eine Sicherung wurde bereits erstellt.' : 'Vor der weiteren Arbeit unter Einstellungen eine ZIP-Sicherung erstellen. Bestehende Projekte, Fotos, Skizzen und Aufmaße bleiben erhalten.'}</p></div>
+      <div class="search"><input class="inp" id="catQ" type="search" placeholder="Nummer oder Bezeichnung" value="${esc(q)}"></div>
+      <button class="btn primary block" id="catNew">Neue Leistung</button>
+      <div id="catList">${shown.map((c) => `<article class="card"><h3 style="margin:0">${esc(c.title)} ${c.active === false ? '· archiviert' : ''}</h3><p class="small">${esc(c.unit)} · ${esc(fmtEUR(c.price))}</p><p>${esc(c.text)}</p>
+        <div class="grid2"><button class="btn" data-edit="${esc(c.id)}">Bearbeiten</button><button class="btn" data-copy="${esc(c.id)}">Duplizieren</button></div>
+        <button class="btn" data-arch="${esc(c.id)}">${c.active === false ? 'Wieder aktivieren' : 'Archivieren'}</button></article>`).join('') || '<p>Keine Treffer.</p>'}
+      </div></main>`;
+    $('#catQ').oninput = () => draw();
+    $('#catNew').onclick = () => editItem(null);
+    $$('[data-edit]').forEach((b) => b.onclick = () => editItem(items.find((c) => c.id === b.dataset.edit)));
+    $$('[data-copy]').forEach((b) => b.onclick = async () => {
+      const src = items.find((c) => c.id === b.dataset.copy);
+      await db.put('catalog', { ...src, id: uid(), nr: src.nr + 'a', title: src.nr + 'a.' + src.short, seeded: false, active: true });
+      toast('Duplikat angelegt'); draw();
+    });
+    $$('[data-arch]').forEach((b) => b.onclick = async () => {
+      const src = items.find((c) => c.id === b.dataset.arch);
+      if (src.active !== false && !await confirmDlg('Archivieren?', 'Der Eintrag bleibt für bestehende Zuordnungen erhalten und verschwindet aus der Auswahl.')) return;
+      src.active = src.active === false;
+      await db.put('catalog', src); toast(src.active ? 'Wieder aktiv' : 'Archiviert'); draw();
+    });
+  };
+  async function editItem(src) {
+    const r = await modal({
+      title: src ? 'Leistung bearbeiten' : 'Neue Leistung',
+      fields: [
+        { name: 'nr', label: 'Katalognummer', value: src?.nr || '' },
+        { name: 'short', label: 'Kurzbezeichnung', value: src?.short || '' },
+        { name: 'text', label: 'Angebotstext', type: 'textarea', value: src?.text || '' },
+        { name: 'unit', label: 'Einheit', type: 'select', value: src?.unit || 'm', options: ['m', 'm²', 'Stück', 'psch'].map((u) => ({ value: u, label: u })) },
+        { name: 'price', label: 'Netto-Einheitspreis EUR', value: src ? String(src.price).replace('.', ',') : '', inputmode: 'decimal' },
+      ],
+      buttons: [{ label: 'Abbrechen', value: null }, { label: 'Speichern', value: 'ok', cls: 'primary' }],
+    });
+    if (!r) return;
+    const price = parseNum(r.price);
+    if (!isFinite(price)) return toast('Preis ungültig');
+    const nr = r.nr.trim() || '00';
+    const short = r.short.trim() || 'Leistung';
+    await db.put('catalog', { ...(src || { id: uid(), seeded: false, source: 'custom' }), nr, short, title: `${nr}.${short}`, text: r.text.trim(), unit: r.unit, price, active: src?.active !== false });
+    toast('Gespeichert'); draw();
+  }
+  await draw();
+}
 async function viewSettings() {
   const s = await settings(); let est = '';
   try { const e = await navigator.storage.estimate(); est = `${fmtBytes(e.usage)} belegt von ca. ${fmtBytes(e.quota)}`; } catch (e) { }
@@ -490,7 +678,8 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku 2 · v1.7.7 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku 2 · v1.8.0 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p>
+    <p class="small"><a href="#/katalog">Leistungskatalog</a> · Testpreise vor der Verwendung prüfen. Keine Firmendaten sind voreingestellt.</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
     const f = $('#sf');
@@ -511,6 +700,7 @@ async function viewSettings() {
       const blob = await exportZip(ps.map(p => p.id));
       const name = `Baudoku_Backup_alle_${isoDate()}.zip`;
       showFileActions(out, blob, name, 'Baudoku Backup');
+      await db.setSetting('migrationBackupOk', true);
       toast(`Backup erstellt (${fmtBytes(blob.size)})`);
     } catch (e) { console.error(e); out.textContent = 'Fehler beim Backup: ' + e.message; }
     b.disabled = false;
@@ -540,7 +730,7 @@ async function deleteSheetFlow(id) {
 async function viewSheet(id) {
   const sheet = await db.get('sheets', id); if (!sheet) return go('#/');
   APP.innerHTML = '<div id="drawroot"></div>';
-  const ed = mountDraw($('#drawroot'), { sheet, onBack: () => go(`#/p/${sheet.projectId}?tab=sketches`) });
+  const ed = mountDraw($('#drawroot'), { sheet, catalog: await db.all('catalog'), onDoc: () => syncServices(sheet.projectId), onBack: () => go(`#/p/${sheet.projectId}?tab=sketches`) });
   cleanup.push(() => ed.destroy());
   window.__baudoku.draw = ed;
 }
@@ -549,7 +739,7 @@ async function viewDraw(id) {
   const blob = ph.stamped || ph.original;
   const img = await loadImg(blob); cleanup.push(() => URL.revokeObjectURL(img._url));
   APP.innerHTML = '<div id="drawroot"></div>';
-  const ed = mountDraw($('#drawroot'), { photo: ph, img, onBack: () => go(`#/photo/${id}`) });
+  const ed = mountDraw($('#drawroot'), { photo: ph, img, catalog: await db.all('catalog'), onDoc: () => syncServices(ph.projectId), onBack: () => go(`#/photo/${id}`) });
   cleanup.push(() => ed.destroy());
   window.__baudoku.draw = ed;
 }
@@ -559,7 +749,7 @@ async function viewSketch(id) {
   const img = blob ? await loadImg(blob) : null;
   if (img) cleanup.push(() => URL.revokeObjectURL(img._url));
   APP.innerHTML = '<div id="drawroot"></div>';
-  const ed = mountDraw($('#drawroot'), { sketch: sk, img, onBack: () => go(`#/p/${sk.projectId}?tab=sketches`) });
+  const ed = mountDraw($('#drawroot'), { sketch: sk, img, catalog: await db.all('catalog'), onDoc: () => syncServices(sk.projectId), onBack: () => go(`#/p/${sk.projectId}?tab=sketches`) });
   cleanup.push(() => ed.destroy());
   window.__baudoku.draw = ed;
 }

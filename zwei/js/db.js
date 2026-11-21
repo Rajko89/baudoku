@@ -1,6 +1,6 @@
 // IndexedDB-Speicher (alles lokal auf dem Gerät)
-const DB_NAME = 'baudoku-2', DB_VER = 3;
-export const STORES = ['projects', 'photos', 'notes', 'aufmass', 'settings', 'sketches', 'sheets'];
+const DB_NAME = 'baudoku-2', DB_VER = 4;
+export const STORES = ['projects', 'photos', 'notes', 'aufmass', 'settings', 'sketches', 'sheets', 'catalog', 'offers'];
 let dbp;
 function open() {
   if (dbp) return dbp;
@@ -11,6 +11,8 @@ function open() {
       if (!d.objectStoreNames.contains('projects')) d.createObjectStore('projects', { keyPath: 'id' });
       for (const s of ['photos', 'notes', 'aufmass', 'sketches', 'sheets']) if (!d.objectStoreNames.contains(s)) d.createObjectStore(s, { keyPath: 'id' }).createIndex('projectId', 'projectId');
       if (!d.objectStoreNames.contains('settings')) d.createObjectStore('settings', { keyPath: 'key' });
+      if (!d.objectStoreNames.contains('catalog')) d.createObjectStore('catalog', { keyPath: 'id' });
+      if (!d.objectStoreNames.contains('offers')) d.createObjectStore('offers', { keyPath: 'id' }).createIndex('projectId', 'projectId');
     };
     r.onsuccess = () => res(r.result);
     r.onerror = () => rej(r.error);
@@ -26,9 +28,10 @@ export async function all(name) { const s = await store(name); return req(s.getA
 export async function byProject(name, pid) { const s = await store(name); return req(s.index('projectId').getAll(pid)); }
 export async function deleteProject(pid) {
   const d = await open();
-  const t = d.transaction(['projects', 'photos', 'notes', 'aufmass', 'sketches', 'sheets'], 'readwrite');
+  const names = ['projects', 'photos', 'notes', 'aufmass', 'sketches', 'sheets'].concat(d.objectStoreNames.contains('offers') ? ['offers'] : []);
+  const t = d.transaction(names, 'readwrite');
   t.objectStore('projects').delete(pid);
-  for (const s of ['photos', 'notes', 'aufmass', 'sketches', 'sheets']) {
+  for (const s of names.filter((n) => n !== 'projects')) {
     const os = t.objectStore(s);
     const keys = await req(os.index('projectId').getAllKeys(pid));
     keys.forEach(k => os.delete(k));

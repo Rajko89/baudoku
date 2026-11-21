@@ -153,6 +153,10 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 #drawMsg{margin:0;max-height:64px;overflow:auto;background:#111;color:#ffd43b;font:600 12px/1.35 ui-monospace,monospace;padding:6px 8px;white-space:pre-wrap}
 #drawForm{display:flex;gap:6px;padding:6px;background:#24303a;align-items:center}
 #drawForm[hidden]{display:none!important}
+#assignBox{display:flex;flex-direction:column;gap:6px;padding:8px;background:#fff;max-height:48vh;overflow:auto}
+#assignBox[hidden]{display:none!important}
+#assignBox input,#assignBox select{min-height:44px;border:1px solid var(--line);border-radius:10px;padding:0 8px}
+#assignList label{display:flex;gap:8px;align-items:center;min-height:44px}
 #drawForm input,#drawForm select{min-height:48px;font-size:1.05rem;border-radius:10px;border:0;padding:0 8px}
 #drawForm input{flex:1;min-width:0}
 #drawCtx{display:flex;flex-wrap:wrap;gap:6px;padding:0 8px 6px;background:#1f2933}
