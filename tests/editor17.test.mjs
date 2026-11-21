@@ -45,8 +45,11 @@ try {
     };
     await page.locator('#draw-line').click();
     await gesture([await at(0.2, 0.42), await at(0.8, 0.42)]);
-    await page.locator('#draw-edit').click();
     await gesture([await at(0.5, 0.42)]);
+    await page.waitForTimeout(400);
+    await gesture([await at(0.5, 0.42)]);
+    await gesture([await at(0.5, 0.42)]);
+    await page.locator('#btn-split').waitFor();
     await page.locator('#penBar [data-c="#e03131"]').click();
     await page.locator('#draw-dash').click();
     const styled = await page.evaluate(() => window.__baudoku.draw.edgeEnds());
