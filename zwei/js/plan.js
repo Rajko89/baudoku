@@ -59,8 +59,9 @@ function splitEdge(doc, edgeId, x, y) {
   const n = { id: nid(doc, 'n'), x, y };
   doc.nodes.push(n);
   const keptName = String(e.name || '').trim();
-  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}) };
-  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}) };
+  const carried = carryService(e);
+  const e1 = { id: nid(doc, 'e'), a: e.a, b: n.id, label: e.label, measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}), ...carried };
+  const e2 = { id: nid(doc, 'e'), a: n.id, b: e.b, label: nextEdgeLabel(doc), measure: null, chain: e.chain || null, free: !!e.free, ...(keptName ? { name: keptName } : {}), ...carried };
   if (e.measure) {
     const chain = e.chain || nid(doc, 'c');
     e1.chain = chain; e2.chain = chain;
@@ -280,6 +281,80 @@ export function namedMeasure(edge) {
   if (!name || !edge?.measure || edge.measure.source === 'derived' || !isFinite(+edge.measure.value)) return '';
   return `${name} ${fmtNum(edge.measure.value)} ${edge.measure.unit || 'm'}`;
 }
+function uniqueServices(list) {
+  const seen = new Set();
+  const out = [];
+  for (const s of list || []) {
+    if (!s?.catalogId || seen.has(s.catalogId)) continue;
+    seen.add(s.catalogId);
+    out.push({ catalogId: s.catalogId });
+  }
+  return out;
+}
+function carryService(e) {
+  const o = {};
+  const services = uniqueServices(e?.services);
+  if (services.length) o.services = services;
+  if (e?.labelMode) o.labelMode = e.labelMode;
+  if (e?.widthM != null && e.widthM !== '') o.widthM = +e.widthM;
+  if (e?.widthUnit) o.widthUnit = e.widthUnit;
+  return o;
+}
+export function setEdgeAssignment(doc, edgeId, patch = {}) {
+  const d = clone(doc);
+  const e = edgeById(d, edgeId);
+  if (!e) return d;
+  if ('name' in patch) {
+    const t = cleanPartName(patch.name);
+    if (!t) delete e.name; else e.name = t;
+  }
+  if ('services' in patch) {
+    const services = uniqueServices(patch.services);
+    if (services.length) e.services = services; else delete e.services;
+  }
+  if ('labelMode' in patch) {
+    if (!patch.labelMode) delete e.labelMode; else e.labelMode = patch.labelMode;
+  }
+  if ('widthM' in patch) {
+    if (patch.widthM == null || patch.widthM === '') delete e.widthM; else e.widthM = +patch.widthM;
+  }
+  if ('widthUnit' in patch) e.widthUnit = patch.widthUnit || 'm';
+  if ('labelDx' in patch) e.labelDx = +patch.labelDx || 0;
+  if ('labelDy' in patch) e.labelDy = +patch.labelDy || 0;
+  return d;
+}
+export function setFaceAssignment(doc, sig, patch = {}) {
+  const d = clone(doc);
+  d.faceMeta = { ...(d.faceMeta || {}) };
+  const cur = { ...(d.faceMeta[sig] || {}) };
+  if ('name' in patch) cur.name = cleanPartName(patch.name);
+  if ('services' in patch) cur.services = uniqueServices(patch.services);
+  if ('labelMode' in patch) cur.labelMode = patch.labelMode || '';
+  if ('areaKind' in patch) cur.areaKind = patch.areaKind || 'measured';
+  d.faceMeta[sig] = cur;
+  return d;
+}
+export function addPiece(doc, x, y, name = '') {
+  const d = clone(doc);
+  const id = nid(d, 'p');
+  d.pieces = [...(d.pieces || []), { id, x, y, name: cleanPartName(name), services: [] }];
+  return d;
+}
+export function setPieceAssignment(doc, pieceId, patch = {}) {
+  const d = clone(doc);
+  const p = (d.pieces || []).find((x) => x.id === pieceId);
+  if (!p) return d;
+  if ('name' in patch) p.name = cleanPartName(patch.name);
+  if ('services' in patch) p.services = uniqueServices(patch.services);
+  if ('x' in patch) p.x = +patch.x;
+  if ('y' in patch) p.y = +patch.y;
+  return d;
+}
+export function deletePiece(doc, pieceId) {
+  const d = clone(doc);
+  d.pieces = (d.pieces || []).filter((p) => p.id !== pieceId);
+  return d;
+}
 function orderChain(doc, edges) {
   const deg = new Map();
   for (const e of edges) {
@@ -322,7 +397,7 @@ export function splitEdgeAt(doc, edgeId, t = 0.5) {
   const parent = e.measure && isFinite(+e.measure.value) ? +e.measure.value : (total && !e.group ? +total.value : null);
   const m1 = parent == null ? null : { value: round2(parent * tt), unit: (e.measure || total).unit || 'm', source: 'user' };
   const m2 = parent == null ? null : { value: round2(parent - m1.value), unit: (e.measure || total).unit || 'm', source: 'user' };
-  const shared = { free: !!e.free, color: e.color, dash: e.dash, group, base, total: total || (m1 ? { value: round2(m1.value + m2.value), unit: m1.unit } : null) };
+  const shared = { free: !!e.free, color: e.color, dash: e.dash, group, base, total: total || (m1 ? { value: round2(m1.value + m2.value), unit: m1.unit } : null), ...carryService(e) };
   if (cleanPartName(e.name)) shared.name = cleanPartName(e.name);
   const e2id = nid(d, 'e');
   const e1 = { id: e.id, a: e.a, b: n.id, label: base + '1', measure: m1, ...shared };
