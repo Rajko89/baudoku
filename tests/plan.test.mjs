@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols, arrowSpan } from '../js/plan.js';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, toggleRight, setParallel, evaluateCycle, snapTarget, cycleAt, importLegacyStrokes, fmtNum, angleSnap, evaluateFaces, polylabel, pointInPoly, sketchProposals, moveEdge, nodeById, constrainEndpoint, placeEndpoint, deleteEdge, moveNode, splitEdgeAt, moveSplitPoint, addShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, addText, moveText } from '../js/plan.js';
 
 function line(doc, x1, y1, x2, y2) { return addLine(doc, { x: x1, y: y1 }, { x: x2, y: y2 }); }
 function rect() {
@@ -324,4 +324,18 @@ test('Teilen benennt a1/a2, hält die Summe und die Fläche', () => {
   assert.equal(pointed.shapes.at(-1).x2, 0.45);
   assert.equal(pointed.edges.length, old.edges.length);
   assert.equal(evaluateFaces(pointed).length, evaluateFaces(old).length);
+});
+
+test('Text ohne Winkel bleibt 0°, Drehung rastet ein und bleibt lesbar', () => {
+  let d = addText(emptyDoc(), 0.4, 0.5, 'Traufe');
+  assert.equal(d.texts[0].ang, undefined);
+  d = moveText(d, d.texts[0].id, 0.42, 0.52);
+  assert.equal(d.texts[0].text, 'Traufe');
+  assert.equal(uprightAngle(0), 0);
+  assert.ok(Math.abs(uprightAngle(Math.PI) ) < 0.01);
+  assert.ok(Math.abs(uprightAngle(Math.PI * 0.75) + Math.PI / 4) < 0.05);
+  assert.equal(snapAngle(2 * Math.PI / 180, []), 0);
+  assert.ok(Math.abs(snapAngle(85 * Math.PI / 180, []) - Math.PI / 2) < 0.01);
+  const guide = 20 * Math.PI / 180;
+  assert.ok(Math.abs(snapAngle(24 * Math.PI / 180, [guide]) - guide) < 0.01);
 });

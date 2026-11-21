@@ -5,9 +5,10 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode,   addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle,
 } from './plan.js';
 
+const ARROW_LABELS = ['Kamin', 'Dachablauf', 'Notablauf', 'Wandanschluss', 'Dachrinne', 'Attika', 'Lichtkuppel', 'Entlüftung', 'Antenne', 'Gaube', 'Dachfenster'];
 const INK = '#e8590c';
 const MEASURE = '#1c7ed6';
 export const LINE_COLORS = [
@@ -52,17 +53,20 @@ function paintArrow(ctx, x1, y1, x2, y2, { color = '#111111', dash = false, lw =
   ctx.fillStyle = color || '#111111';
   ctx.fill();
   if (text) {
+    const show = uprightAngle(Math.atan2(dy, dx));
+    const lx = x1 - ux * (16 * z);
+    const ly = y1 - uy * (16 * z);
+    ctx.translate(lx, ly);
+    ctx.rotate(show);
     ctx.font = `700 ${Math.max(14, 16 * z)}px sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    const lx = x1 - ux * (20 * z);
-    const ly = y1 - uy * (20 * z);
     const tw = ctx.measureText(text).width + 12 * z;
     const th = 22 * z;
     ctx.fillStyle = 'rgba(255,255,255,.94)';
-    ctx.fillRect(lx - tw / 2, ly - th / 2, tw, th);
+    ctx.fillRect(-tw / 2, -th / 2, tw, th);
     ctx.fillStyle = '#111';
-    ctx.fillText(text, lx, ly);
+    ctx.fillText(text, 0, 0);
   }
   ctx.restore();
 }
@@ -105,6 +109,20 @@ export function renderDoc(img, doc, { hidePhoto = false, max = 1600 } = {}) {
 function readable(ang) {
   return ang > Math.PI / 2 || ang < -Math.PI / 2 ? ang + Math.PI : ang;
 }
+function paintText(ctx, x, y, text, ang, size) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(uprightAngle(ang || 0));
+  ctx.font = `700 ${size}px sans-serif`;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const tw = ctx.measureText(text || '').width + 12;
+  ctx.fillStyle = 'rgba(255,255,255,.94)';
+  ctx.fillRect(-6, -size, tw, size + 8);
+  ctx.fillStyle = '#111';
+  ctx.fillText(text || '', 0, 0);
+  ctx.restore();
+}
 function paintDoc(ctx, doc, w, h, selected) {
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   drawStrokes(ctx, (doc.strokes || []).map((s) => ({ points: s.points, width: s.width || 0.012, color: s.color })), w, h);
@@ -144,13 +162,7 @@ function paintDoc(ctx, doc, w, h, selected) {
       ctx.fillText('∟', n.x * w + 8, n.y * h - 8);
     }
   }
-  for (const t of doc.texts || []) {
-    ctx.font = `700 ${Math.max(16, w / 36)}px sans-serif`;
-    const tw = ctx.measureText(t.text || '').width + 12;
-    ctx.fillStyle = 'rgba(255,255,255,.92)';
-    ctx.fillRect(t.x * w - 6, t.y * h - 18, tw, 24);
-    ctx.fillStyle = '#111'; ctx.textAlign = 'left'; ctx.fillText(t.text || '', t.x * w, t.y * h);
-  }
+  for (const t of doc.texts || []) paintText(ctx, t.x * w, t.y * h, t.text, t.ang || 0, Math.max(16, w / 36));
   for (const s of doc.shapes || []) {
     if (s.kind === 'arrow') {
       paintArrow(ctx, s.x * w, s.y * h, (s.x2 ?? s.x) * w, (s.y2 ?? s.y) * h, { color: s.color, dash: !!s.dash, lw: Math.max(4, w / 140), z: Math.max(1, w / 700), text: s.text || '' });
@@ -462,7 +474,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     ctxBar.innerHTML = [
       selectedNode ? '<button type="button" id="btn-right" class="btn">rechter Winkel</button>' : '',
       detail === 'line' && selectedEdge ? '<button type="button" id="btn-split" class="btn">Teilen</button><button type="button" id="btn-parallel" class="btn">parallel</button><button type="button" id="btn-del-line" class="btn danger">Linie löschen</button>' : '',
-      detail === 'shape' && selectedShape ? `${(doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? '<button type="button" id="btn-arrow-text" class="btn">Text am Pfeil</button>' : ''}<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>` : '',
+      detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind === 'arrow' ? `<div class="arrow-labels">${ARROW_LABELS.map((l) => `<button type="button" data-arrow-label="${l}" class="${(doc.shapes || []).find((s) => s.id === selectedShape)?.text === l ? 'on' : ''}">${l}</button>`).join('')}<button type="button" id="btn-arrow-text" data-arrow-label="__custom">Eigener Text…</button><button type="button" data-arrow-label="__clear">ohne Text</button></div><button type="button" id="btn-del-shape" class="btn danger">Löschen</button>` : '',
+      detail === 'shape' && selectedShape && (doc.shapes || []).find((s) => s.id === selectedShape)?.kind !== 'arrow' ? '<button type="button" id="btn-del-shape" class="btn danger">Löschen</button>' : '',
       detail === 'text' && selectedText ? '<button type="button" id="btn-text-edit" class="btn">Text ändern</button><button type="button" id="btn-text-del" class="btn danger">Text löschen</button>' : '',
     ].join('');
     const right = el.querySelector('#btn-right');
@@ -491,11 +504,15 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       msg = 'Teilpunkt ziehen, um die Längen zu verschieben.';
       await refreshArea();
     };
-    const arrowText = el.querySelector('#btn-arrow-text');
-    if (arrowText) arrowText.onclick = () => {
-      const s = (doc.shapes || []).find((x) => x.id === selectedShape);
-      if (s) openForm('arrow-text', s.text || '');
-    };
+    el.querySelectorAll('[data-arrow-label]').forEach((b) => {
+      b.onclick = async () => {
+        const s = (doc.shapes || []).find((x) => x.id === selectedShape);
+        if (!s) return;
+        const v = b.dataset.arrowLabel;
+        if (v === '__custom') { openForm('arrow-text', s.text || ''); return; }
+        await commit(patchShape(doc, s.id, { text: v === '__clear' ? '' : v }));
+      };
+    });
     const delShape = el.querySelector('#btn-del-shape');
     if (delShape) delShape.onclick = async () => {
       const id = selectedShape;
@@ -572,10 +589,17 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       }
     }
     for (const t of d.texts || []) {
-      ctx2.font = `700 ${18 * z}px sans-serif`;
-      const tw = ctx2.measureText(t.text || '').width + 14 * z;
-      ctx2.fillStyle = 'rgba(255,255,255,.94)'; ctx2.fillRect(X(t.x) - 6 * z, Y(t.y) - 20 * z, tw, 26 * z);
-      ctx2.fillStyle = '#111'; ctx2.textAlign = 'left'; ctx2.fillText(t.text || '', X(t.x), Y(t.y));
+      paintText(ctx2, X(t.x), Y(t.y), t.text, t.ang || 0, 18 * z);
+      if (t.id === selectedText) {
+        const g = textGripNorm(t);
+        ctx2.beginPath();
+        ctx2.arc(X(g[0]), Y(g[1]), 9 * z, 0, 7);
+        ctx2.fillStyle = '#fff';
+        ctx2.fill();
+        ctx2.lineWidth = 3 * z;
+        ctx2.strokeStyle = '#0b7285';
+        ctx2.stroke();
+      }
     }
     const drawShape = (s, selId) => {
       if (s.kind === 'arrow') {
@@ -646,18 +670,56 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     for (const n of doc.nodes) { const d = Math.hypot(n.x - p[0], n.y - p[1]); if (d < bd) { bd = d; best = n; } }
     return best;
   }
+  function textWidthPx(text, z) {
+    ctx.font = `700 ${18 * (z || 1)}px sans-serif`;
+    return ctx.measureText(text || '').width + 14 * (z || 1);
+  }
+  function textGripNorm(t) {
+    const z = userZoom || 1;
+    const ang = uprightAngle(t.ang || 0);
+    const dist = textWidthPx(t.text, z) + 18 * z;
+    const iw = view.iw * view.s || 1, ih = view.ih * view.s || 1;
+    return [t.x + Math.cos(ang) * dist / iw, t.y + Math.sin(ang) * dist / ih];
+  }
+  function hitTextGrip(p) {
+    const t = (doc.texts || []).find((x) => x.id === selectedText);
+    if (!t) return null;
+    const g = textGripNorm(t);
+    const dx = (p[0] - g[0]) * (pxPerNorm() || 1);
+    const dy = (p[1] - g[1]) * (pxPerNormY() || 1);
+    return Math.hypot(dx, dy) <= 22 ? t : null;
+  }
   function hitText(p) {
+    const z = userZoom || 1;
+    const kx = pxPerNorm() || 1, ky = pxPerNormY() || 1;
     let best = null, bd = Infinity;
     for (const t of doc.texts || []) {
-      const w = Math.max(px(28), ((t.text || '').length || 1) * px(8));
-      const dx = p[0] - t.x;
-      const dy = t.y - p[1];
-      if (dx >= -px(18) && dx <= w && dy >= -px(10) && dy <= px(24)) {
-        const d = Math.hypot(dx, dy);
+      const ang = uprightAngle(t.ang || 0);
+      const dx = (p[0] - t.x) * kx, dy = (p[1] - t.y) * ky;
+      const c = Math.cos(-ang), s = Math.sin(-ang);
+      const lx = dx * c - dy * s, ly = dx * s + dy * c;
+      const tw = Math.max(44, textWidthPx(t.text, z));
+      if (lx >= -22 && lx <= tw && ly >= -44 && ly <= 22) {
+        const d = Math.hypot(lx, ly);
         if (d < bd) { bd = d; best = t; }
       }
     }
     return best;
+  }
+  function angleGuides(nx, ny) {
+    const iw = view.iw || 1, ih = view.ih || 1;
+    const out = [];
+    for (const e of doc.edges || []) {
+      const a = nodeById(doc, e.a), b = nodeById(doc, e.b);
+      if (!a || !b || pointSeg(nx, ny, a, b) > 0.14) continue;
+      out.push(Math.atan2((b.y - a.y) * ih, (b.x - a.x) * iw));
+    }
+    for (const s of doc.shapes || []) {
+      if (s.kind !== 'arrow') continue;
+      if (pointSeg(nx, ny, { x: s.x, y: s.y }, { x: s.x2 ?? s.x, y: s.y2 ?? s.y }) > 0.14) continue;
+      out.push(Math.atan2(((s.y2 ?? s.y) - s.y) * ih, ((s.x2 ?? s.x) - s.x) * iw));
+    }
+    return out;
   }
   function arrowPart(s, p) {
     const kx = pxPerNorm() || 1, ky = pxPerNormY() || 1;
@@ -806,6 +868,15 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (hands === 'hold' || hands === 'pinch') return;
     hands = 'draw';
     const p = norm(ev);
+    down = { x: ev.clientX, y: ev.clientY, line: null, shape: null, text: null };
+    const grip = hitTextGrip(p);
+    if (grip) {
+      selectedText = grip.id;
+      selectedEdge = null;
+      selectedShape = null;
+      active = { tool: 'spin', id: grip.id, x0: p[0], y0: p[1], moved: false, origin: clone(doc) };
+      return;
+    }
     down = { x: ev.clientX, y: ev.clientY, line: hitEdge(p), shape: hitShape(p), text: hitText(p) };
     const t = hitText(p);
     const shapeHit = hitShape(p);
@@ -927,6 +998,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       active.angled = placed.angled;
       showSnap(placed.mark);
       paint();
+    } else if (active.tool === 'spin') {
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 6) {
+        if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
+        active.moved = true;
+      }
+      if (active.moved) {
+        const t = (doc.texts || []).find((x) => x.id === active.id);
+        if (t) {
+          const iw = view.iw || 1, ih = view.ih || 1;
+          const raw = Math.atan2((p[1] - t.y) * ih, (p[0] - t.x) * iw);
+          t.ang = snapAngle(raw, angleGuides(t.x, t.y));
+        }
+        paint();
+      }
     } else if (active.tool === 'text') {
       if (cssDist(active.x0, active.y0, p[0], p[1]) > 12) {
         if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
@@ -994,6 +1079,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
         await refreshArea();
       } else paint();
     }     else if (act.tool === 'text' && act.moved) await persist();
+    else if (act.tool === 'spin') { if (act.moved) await persist(); else paint(); }
     else if (act.tool === 'text' && !act.moved) {
       selectedText = act.id;
       const t = (doc.texts || []).find((x) => x.id === act.id);
@@ -1021,6 +1107,8 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       selectedShape = doc.shapes?.[doc.shapes.length - 1]?.id || null;
       selectedEdge = null;
       selectedText = null;
+      detail = 'shape';
+      paint();
     } else if (act.tool === 'shape' && act.moved) await persist();
     else if (act.tool === 'face' && act.moved) {
       const base = (doc.faceOffsets || []).find((f) => f.sig === act.sig) || { dx: 0, dy: 0 };
@@ -1192,7 +1280,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     sheet: () => ({ w: view.iw || img.naturalWidth || img.width || 1, h: view.ih || img.naturalHeight || img.height || 1 }),
     toolsOpen: () => toolsOpen,
     nodes: () => doc.nodes.length,
-    texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y })),
+    texts: () => (doc.texts || []).map((t) => ({ text: t.text, x: t.x, y: t.y, ang: t.ang || 0 })),
+    textGrip() {
+      const t = (doc.texts || []).find((x) => x.id === selectedText);
+      if (!t) return null;
+      const g = textGripNorm(t);
+      return { x: g[0], y: g[1], ang: t.ang || 0 };
+    },
     faces: () => evaluateFaces(doc).map((f) => ({ text: f.text, x: f.x, y: f.y, ok: f.ok, free: f.free })),
     rights: () => (doc.rights || []).length,
     selected: () => !!selectedEdge,

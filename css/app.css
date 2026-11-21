@@ -155,9 +155,12 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 #drawForm[hidden]{display:none!important}
 #drawForm input,#drawForm select{min-height:48px;font-size:1.05rem;border-radius:10px;border:0;padding:0 8px}
 #drawForm input{flex:1;min-width:0}
-#drawCtx{display:flex;gap:6px;padding:0 8px 6px;background:#1f2933}
+#drawCtx{display:flex;flex-wrap:wrap;gap:6px;padding:0 8px 6px;background:#1f2933}
 #drawCtx:empty{display:none}
 #drawCtx .btn{flex:1;min-height:48px;background:#fff;color:#1f2933}
+.arrow-labels{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+.arrow-labels button{min-height:44px;padding:0 10px;border:0;border-radius:10px;background:#fff;color:#1f2933;font-weight:700;font-size:.85rem}
+.arrow-labels button.on{background:var(--accent);color:#fff}
 #penBar{display:none;flex-wrap:wrap;gap:6px;padding:6px 8px;background:#111}
 #penBar.on{display:flex;position:absolute;left:0;right:0;bottom:0;z-index:4;max-height:46%}
 #penBar button{flex:1 1 22%;min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-weight:700}

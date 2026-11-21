@@ -171,6 +171,44 @@ export function moveText(doc, id, x, y) {
   if (t) { t.x = x; t.y = y; }
   return d;
 }
+export function setTextAngle(doc, id, ang) {
+  const d = clone(doc);
+  const t = d.texts.find((t0) => t0.id === id);
+  if (t && isFinite(+ang)) t.ang = +ang;
+  return d;
+}
+export function uprightAngle(ang) {
+  let a = +ang || 0;
+  if (!isFinite(a)) return 0;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  if (a > Math.PI / 2 || a <= -Math.PI / 2) a += Math.PI;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  return a;
+}
+export function snapAngle(ang, guides = [], tol = 10 * Math.PI / 180) {
+  let a = +ang || 0;
+  while (a > Math.PI) a -= Math.PI * 2;
+  while (a <= -Math.PI) a += Math.PI * 2;
+  const opts = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+  for (const g of guides || []) {
+    let b = +g || 0;
+    while (b > Math.PI) b -= Math.PI * 2;
+    while (b <= -Math.PI) b += Math.PI * 2;
+    opts.push(b, b + Math.PI, b - Math.PI);
+  }
+  let best = a, bd = tol;
+  for (const target of opts) {
+    let d = a - target;
+    while (d > Math.PI) d -= Math.PI * 2;
+    while (d < -Math.PI) d += Math.PI * 2;
+    if (Math.abs(d) <= bd) { bd = Math.abs(d); best = target; }
+  }
+  while (best > Math.PI) best -= Math.PI * 2;
+  while (best <= -Math.PI) best += Math.PI * 2;
+  return best;
+}
 export function deleteText(doc, id) {
   const d = clone(doc);
   d.texts = d.texts.filter((t) => t.id !== id);
