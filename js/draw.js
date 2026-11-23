@@ -20,6 +20,7 @@ export const LINE_COLORS = [
   { name: 'Gelb', hex: '#ffd43b' },
   { name: 'Lila', hex: '#7950f2' },
   { name: 'Rot', hex: '#e03131' },
+  { name: 'Orange', hex: '#F57C00' },
   { name: 'Schwarz', hex: '#111111' },
 ];
 function edgeLook(e) {
@@ -249,7 +250,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" data-w="0.012">mittel</button>
       <button type="button" data-w="0.022">groß</button>
       <button type="button" id="draw-dash">gestrichelt</button>
-      ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}">${c.name}</button>`).join('')}
+      ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}${c.hex.toLowerCase() === '#f57c00' ? ' ora' : ''}">${c.name}</button>`).join('')}
       <div id="arrowLabels" class="arrow-labels" hidden></div>
       <div id="lineNames" class="arrow-labels" hidden></div>
     </div></div>

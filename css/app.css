@@ -169,8 +169,10 @@ body:has(.me) .toast{top:calc(130px + var(--safe-t));bottom:auto}
 #arrowLabels[hidden]{display:none!important}
 #penBar button{flex:1 1 22%;min-height:48px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-weight:700}
 #penBar button.on{outline:3px solid #fff}
-#penBar .swatch{color:#fff}
+#penBar .swatch{flex:1 1 calc(33.333% - 6px);max-width:calc(33.333% - 4px);color:#fff;font-size:.82rem;line-height:1.1;padding:4px 2px}
+#penBar.ink #draw-dash{flex:1 1 100%;max-width:none}
 #penBar .yel{color:#111;box-shadow:inset 0 0 0 3px #111}
+#penBar .ora{background:#F57C00;color:#111;box-shadow:inset 0 0 0 2px #111}
 #penBar.pen #draw-dash{display:none}
 #penBar.ink [data-w]{display:none}
 .draw-tools{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;padding:6px 6px calc(6px + var(--safe-b));background:#1f2933}
