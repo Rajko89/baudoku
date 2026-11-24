@@ -168,7 +168,7 @@ test('I erneutes Laden erzeugt die zehn Positionen nicht noch einmal', () => {
   assert.equal(dimensionCaption(d.edges[0], twice), 'Blende · 10,00 m');
 });
 
-test('J die Haupt-App ist v1.7.9 und Baudoku 2 ist v1.8.1', () => {
+test('J die Haupt-App ist v1.7.9 und Baudoku 2 ist v1.9.0', () => {
   const mainSw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
   const zweiSw = readFileSync(new URL('../zwei/sw.js', import.meta.url), 'utf8');
   const mainApp = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
@@ -179,7 +179,7 @@ test('J die Haupt-App ist v1.7.9 und Baudoku 2 ist v1.8.1', () => {
   assert.doesNotMatch(zweiDraw, /name: 'Orange'/);
   assert.doesNotMatch(mainApp, /cat-seed-01/);
   assert.doesNotMatch(mainApp, /Leistungskatalog/);
-  assert.match(zweiSw, /baudoku2-v1\.8\.1/);
+  assert.match(zweiSw, /baudoku2-v1\.9\.0/);
   assert.doesNotMatch(zweiSw, /baudoku-v1\.7\.7/);
 });
 

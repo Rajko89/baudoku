@@ -26,7 +26,7 @@ test('Orange steht in der Palette und bleibt an der Linie gespeichert', () => {
   const zwei = readFileSync(new URL('../zwei/js/draw.js', import.meta.url), 'utf8');
   const zweiSw = readFileSync(new URL('../zwei/sw.js', import.meta.url), 'utf8');
   assert.doesNotMatch(zwei, /#F57C00/);
-  assert.match(zweiSw, /baudoku2-v1\.8\.1/);
+  assert.match(zweiSw, /baudoku2-v1\.9\.0/);
 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');

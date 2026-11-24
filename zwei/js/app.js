@@ -6,14 +6,17 @@ import { readExif } from './exif.js';
 import { emptyMeasure, measureValue } from './geom.js';
 import { mountEditor, rectify, fmtVal } from './measure.js';
 import { buildPdf, buildOfferPdf } from './pdf.js';
-import { exportZip, importFile } from './backup.js';
+import { exportZip, loadBackup, importOne } from './backup.js';
+import { runSync } from './sync.js';
+import { driveStore, requestAccessToken, revokeToken } from './drive.js';
+import { idbSyncStore } from './local-sync.js';
 import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { mergeSeed, quantitiesFromDocs, syncServiceRows, blankOffer, refreshOffer, includeSuggested, setItemState, patchItem, adoptCatalog, writeBackCatalog, setManualQty, addManualItem, moveItem, finalizeOffer, reviseOffer, uncheckedTestPrices, totals, fmtEUR, fmtQty, effectiveQty, lineNet } from './catalog.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku2-v1.8.1';
+const APP_VERSION = 'baudoku2-v1.9.0';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -61,6 +64,7 @@ async function syncServices(pid) {
 }
 async function route() {
   await ensureCatalog();
+  autoSync().catch((e) => console.warn('Sync', e));
   cleanup.forEach(f => { try { f(); } catch (e) { } }); cleanup = [];
   while (urls.length) URL.revokeObjectURL(urls.pop());
   $('#modal-root').innerHTML = '';
@@ -101,6 +105,8 @@ async function viewList() {
   APP.innerHTML = header('Baudoku 2', { sub: 'Version 2 · Projekte', right: `<button class="ib" data-nav="#/settings" aria-label="Einstellungen">⚙</button>` }) +
     `<main><div class="search"><input class="inp" id="q" type="search" placeholder="Projekt, Kunde, Adresse, BV-Nr. suchen" autocomplete="off"></div>
     <div class="plist" id="plist"></div>
+    <button class="btn block" id="impProject">Projekt importieren</button>
+    <input type="file" id="impProjectFile" accept=".baudoku,.zip,application/zip" hidden>
     <button class="btn block" data-nav="#/katalog" style="margin:12px 0 70px">Leistungskatalog</button></main><button class="btn primary fab" data-nav="#/new">＋ Neues Projekt</button>`;
   const render = () => {
     const q = $('#q').value.trim().toLowerCase();
@@ -114,6 +120,12 @@ async function viewList() {
     }).join('') : `<div class="empty">${projects.length ? 'Keine Treffer.' : 'Noch keine Projekte.<br>Tippe auf „Neues Projekt“.'}</div>`;
   };
   $('#q').addEventListener('input', render); render();
+  $('#impProject').onclick = () => $('#impProjectFile').click();
+  $('#impProjectFile').onchange = async () => {
+    const file = $('#impProjectFile').files?.[0];
+    $('#impProjectFile').value = '';
+    if (file) await importProjectDialog(file);
+  };
 }
 
 /* ---------- Projekt anlegen / bearbeiten ---------- */
@@ -135,7 +147,9 @@ async function viewEditProject(id) {
   f.addEventListener('submit', async e => {
     e.preventDefault(); if (!f.name.value.trim()) { f.name.focus(); return toast('Bitte Projektname eingeben'); }
     ['name', 'kunde', 'adresse', 'bvnr', 'datum', 'notiz'].forEach(k => p[k] = f[k].value.trim());
-    p.updated = Date.now(); await db.put('projects', p); toast('Projekt gespeichert'); go(`#/p/${p.id}`);
+    const now = Date.now();
+    p.updated = now; p.updatedAt = now; p.deviceId = await deviceId();
+    await db.put('projects', p); toast('Projekt gespeichert'); scheduleSync(); go(`#/p/${p.id}`);
   });
   if (id) $('#delP').onclick = () => deleteProjectFlow(id);
 }
@@ -154,11 +168,70 @@ async function deleteProjectFlow(id) {
     return;
   }
   if (choice !== 'delete') return;
+  await rememberTombstone(p);
   await db.deleteProject(id);
   toast('Projekt gelöscht');
+  scheduleSync();
   go('#/');
 }
-const touchProject = async pid => { const p = await db.get('projects', pid); if (p) { p.updated = Date.now(); await db.put('projects', p); } };
+async function deviceId() {
+  let id = await db.getSetting('deviceId', '');
+  if (!id) { id = uid(); await db.setSetting('deviceId', id); }
+  return id;
+}
+async function rememberTombstone(project) {
+  const tombs = (await db.getSetting('tombstones', [])).filter((t) => t.id !== project.id);
+  tombs.push({ id: project.id, name: project.name || '', deletedAt: Date.now(), deviceId: await deviceId() });
+  await db.setSetting('tombstones', tombs);
+}
+const touchProject = async (pid) => {
+  const p = await db.get('projects', pid);
+  if (!p) return;
+  const now = Date.now();
+  p.updated = now;
+  p.updatedAt = now;
+  p.deviceId = await deviceId();
+  await db.put('projects', p);
+  scheduleSync();
+};
+let syncTimer = 0;
+function scheduleSync() {
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => { autoSync().catch((e) => console.warn('Sync', e)); }, 2500);
+}
+async function googleToken(clientId, interactive) {
+  const key = 'baudoku2-google-token';
+  const saved = JSON.parse(sessionStorage.getItem(key) || 'null');
+  if (saved?.token && saved.expires > Date.now() + 60000) return saved.token;
+  if (!interactive) return '';
+  const token = await requestAccessToken(clientId);
+  sessionStorage.setItem(key, JSON.stringify({ token, expires: Date.now() + 45 * 60 * 1000 }));
+  return token;
+}
+function clearGoogleToken() {
+  const saved = JSON.parse(sessionStorage.getItem('baudoku2-google-token') || 'null');
+  if (saved?.token) revokeToken(saved.token);
+  sessionStorage.removeItem('baudoku2-google-token');
+}
+async function autoSync() {
+  if (!navigator.onLine) return;
+  const cfg = await db.getSetting('sync', {});
+  if (!cfg.autoSync || !cfg.googleClientId) return;
+  const token = await googleToken(cfg.googleClientId, false);
+  if (!token) return;
+  await runCloudSync(token, cfg);
+}
+async function runCloudSync(token, cfg) {
+  const plan = await runSync(idbSyncStore(), driveStore(token), {
+    deviceId: await deviceId(),
+    deviceName: cfg.deviceName || 'Dieses Gerät',
+    now: Date.now(),
+    makeId: uid,
+  });
+  cfg.lastSyncAt = Date.now();
+  await db.setSetting('sync', cfg);
+  return plan;
+}
 
 /* ---------- Foto hinzufügen ---------- */
 async function addPhoto(pid, blob, source) {
@@ -491,7 +564,10 @@ async function viewProject(pid, tab, q) {
       <label class="chk"><input type="checkbox" id="oSheet" checked> Freie Skizzen (${sheets.length})</label>
       <button class="btn primary block" id="mkPdf" style="margin-top:8px">📄 PDF erstellen</button><div id="pdfOut" style="margin-top:10px"></div></div>
       <div class="card"><h3 style="margin:0 0 8px">Datensicherung</h3><p class="small">Projekt mit allen Fotos, Skizzen, Ausgangsbildern, Notizen, Aufmaß und Rechenwegen als ZIP sichern. Import über ⚙ Einstellungen.</p>
-      <button class="btn block" id="mkZip">💾 Projekt-Backup (ZIP)</button><div id="zipOut" style="margin-top:10px"></div></div>`;
+      <button class="btn block" id="mkZip">💾 Projekt-Backup (ZIP)</button>
+      <button class="btn primary block" id="expProject" style="margin-top:8px">Projekt exportieren</button>
+      <p class="small">Eine Datei zum Weitergeben an Handy oder Computer. Enthält Skizzen, Fotos, Aufmaß, verknüpfte Leistungen und Angebote.</p>
+      <div id="zipOut" style="margin-top:10px"></div></div>`;
     $('#mkPdf').onclick = async () => {
       const b = $('#mkPdf'); b.disabled = true; const out = $('#pdfOut'); out.textContent = 'PDF wird erstellt …';
       try {
@@ -502,6 +578,17 @@ async function viewProject(pid, tab, q) {
         window.__baudoku.lastPdf = blob;
         showFileActions(out, blob, name, `Baudokumentation ${p.name}`);
       } catch (e) { console.error(e); out.textContent = 'Fehler beim PDF-Export: ' + e.message; }
+      b.disabled = false;
+    };
+    $('#expProject').onclick = async () => {
+      const b = $('#expProject'); b.disabled = true; const out = $('#zipOut'); out.textContent = 'Datei wird erstellt …';
+      try {
+        const fresh = await db.get('projects', pid);
+        if (fresh) { fresh.updatedAt = fresh.updatedAt || fresh.updated || Date.now(); fresh.deviceId = fresh.deviceId || await deviceId(); await db.put('projects', fresh); }
+        const blob = await exportZip([pid]);
+        const name = `${safeName(p.name) || 'Projekt'}.baudoku`;
+        showFileActions(out, blob, name, p.name);
+      } catch (e) { console.error(e); out.textContent = 'Fehler beim Export: ' + e.message; }
       b.disabled = false;
     };
     $('#mkZip').onclick = async () => {
@@ -518,6 +605,28 @@ async function viewProject(pid, tab, q) {
 }
 
 /** Teilen + Herunterladen für eine erzeugte PDF- oder ZIP-Datei. Teilen nutzt das Systemmenü, sonst den Download. */
+async function importProjectDialog(file) {
+  let loaded;
+  try { loaded = await loadBackup(file); }
+  catch (e) { toast('Datei nicht lesbar: ' + e.message); return; }
+  if (!loaded.rows.length) return toast('Die Datei enthält kein Projekt');
+  for (const row of loaded.rows) {
+    let mode = 'create';
+    if (row.decision.action === 'ask') {
+      const buttons = [{ label: 'Abbrechen', value: null }, { label: 'Als Kopie anlegen', value: 'copy', cls: 'primary' }];
+      if (row.decision.allowReplace) buttons.push({ label: 'Vorhandenes ersetzen', value: 'replace' });
+      const html = `<p><b>${esc(row.project.name)}</b> ist auf diesem Gerät schon vorhanden${row.existing?.name ? ` („${esc(row.existing.name)}“)` : ''}.</p><p>${row.decision.allowReplace ? 'Die Datei ist neuer. Ersetzen tauscht das vorhandene Projekt aus.' : 'Die Datei ist nicht neuer. Ersetzen ist deshalb nicht möglich.'}</p>`;
+      const choice = await modal({ title: 'Projekt importieren', html, buttons });
+      if (!choice) continue;
+      mode = choice;
+    }
+    try {
+      const result = await importOne(loaded, row.project.id, mode);
+      toast(result.addedCatalog ? `Importiert, ${result.addedCatalog} Katalogeinträge ergänzt` : 'Projekt importiert');
+      go(`#/p/${result.id}`);
+    } catch (e) { toast(e.message || 'Import fehlgeschlagen'); }
+  }
+}
 function showFileActions(el, blob, name, title) {
   el.innerHTML = `<p class="small">✓ ${esc(name)} (${fmtBytes(blob.size)})</p>
     <div class="row">
@@ -674,6 +783,17 @@ async function viewSettings() {
     <label class="chk"><input type="checkbox" name="pdfStamped" ${s.pdfStamped ? 'checked' : ''}> PDF standardmäßig mit Stempel</label>
     <div class="f">Farbe Kopfleiste<div class="head-colors" id="headColors">${Object.entries(HEADER_COLORS).map(([id, c]) => `<button type="button" data-head="${id}" aria-pressed="${(s.header || 'blue') === id ? 'true' : 'false'}" style="background:${c.bg};color:${c.fg}">${c.name}</button>`).join('')}</div></div>
     <button class="btn primary block" type="submit">Speichern</button></form>
+    <div class="card" id="syncCard"><h3 style="margin:0 0 8px">Sync</h3>
+    <label class="f">Google Client-ID<input id="gClient" value="${esc((await db.getSetting('sync', {})).googleClientId || '')}" placeholder="….apps.googleusercontent.com" autocomplete="off"></label>
+    <p class="small" id="syncHint">Ohne Client-ID ist die Synchronisation aus. Die ID wird in den Einstellungen eingetragen und steht nicht fest im Programm. Anleitung: SYNC-EINRICHTUNG.</p>
+    <div id="syncOn">
+      <button type="button" class="btn block" id="gSaveId">Client-ID speichern</button>
+      <button type="button" class="btn primary block" id="gConnect">Mit Google verbinden</button>
+      <button type="button" class="btn block" id="gDisconnect">Trennen</button>
+      <button type="button" class="btn block" id="gSync">Jetzt synchronisieren</button>
+      <label class="chk"><input type="checkbox" id="autoSync"> Automatisch beim Öffnen und nach Änderungen</label>
+      <p class="small" id="lastSync"></p>
+    </div></div>
     <div class="card"><h3 style="margin:0 0 8px">Datensicherung</h3><p class="small">Alle Daten liegen nur auf diesem Gerät. Regelmäßig sichern!</p>
     <div class="grid2"><button class="btn" id="bakAll">💾 Alles sichern</button><button class="btn" id="imp">📥 Importieren</button></div>
     <div id="bakOut" style="margin-top:10px"></div></div>
@@ -681,7 +801,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku 2 · v1.8.1 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p>
+    <p class="small">Baudoku 2 · v1.9.0 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p>
     <p class="small"><a href="#/katalog">Leistungskatalog</a> · Testpreise vor der Verwendung prüfen. Keine Firmendaten sind voreingestellt.</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
@@ -696,6 +816,49 @@ async function viewSettings() {
     await db.setSetting('app', readForm());
   });
   $('#sf').addEventListener('submit', async e => { e.preventDefault(); await db.setSetting('app', readForm()); toast('Gespeichert'); });
+  const syncCfg = await db.getSetting('sync', {});
+  const paintSync = () => {
+    const on = !!$('#gClient').value.trim();
+    $('#syncHint').hidden = on;
+    for (const id of ['gConnect', 'gDisconnect', 'gSync', 'autoSync']) { const el = $('#' + id); if (el) el.disabled = !on; }
+  };
+  $('#autoSync').checked = !!syncCfg.autoSync;
+  $('#lastSync').textContent = syncCfg.lastSyncAt ? `Letzter Sync: ${new Date(syncCfg.lastSyncAt).toLocaleString('de-DE')}` : 'Noch nie synchronisiert';
+  paintSync();
+  $('#gClient').addEventListener('input', paintSync);
+  const saveSyncCfg = async () => {
+    const cfg = await db.getSetting('sync', {});
+    cfg.googleClientId = $('#gClient').value.trim();
+    cfg.autoSync = $('#autoSync').checked;
+    await db.setSetting('sync', cfg);
+    paintSync();
+    return cfg;
+  };
+  $('#gSaveId').onclick = async () => { await saveSyncCfg(); toast('Client-ID gespeichert'); };
+  $('#autoSync').onchange = () => saveSyncCfg();
+  $('#gConnect').onclick = async () => {
+    const cfg = await saveSyncCfg();
+    if (!cfg.googleClientId) return toast('Zuerst eine Client-ID eintragen');
+    if (!navigator.onLine) return toast('Nur online möglich');
+    try {
+      const token = await googleToken(cfg.googleClientId, true);
+      toast(token ? 'Mit Google verbunden' : 'Nicht verbunden');
+    } catch (e) { toast(e.message || 'Verbindung fehlgeschlagen'); }
+  };
+  $('#gDisconnect').onclick = () => { clearGoogleToken(); toast('Getrennt'); };
+  $('#gSync').onclick = async () => {
+    const cfg = await saveSyncCfg();
+    if (!cfg.googleClientId) return toast('Zuerst eine Client-ID eintragen');
+    if (!navigator.onLine) return toast('Nur online möglich');
+    const b = $('#gSync'); b.disabled = true;
+    try {
+      const token = await googleToken(cfg.googleClientId, true);
+      await runCloudSync(token, cfg);
+      $('#lastSync').textContent = `Letzter Sync: ${new Date(cfg.lastSyncAt).toLocaleString('de-DE')}`;
+      toast('Synchronisiert');
+    } catch (e) { console.error(e); toast(e.message || 'Sync fehlgeschlagen'); }
+    b.disabled = false;
+  };
   $('#bakAll').onclick = async () => {
     const ps = await db.all('projects'); if (!ps.length) return toast('Keine Projekte');
     const b = $('#bakAll'); b.disabled = true; const out = $('#bakOut'); out.textContent = 'Backup wird erstellt …';
@@ -710,7 +873,7 @@ async function viewSettings() {
   };
   const inp = $('#in-import');
   $('#imp').onclick = () => inp.click();
-  inp.onchange = async () => { const f = inp.files[0]; inp.value = ''; if (!f) return; try { toast('Import läuft …', 10000); const n = await importFile(f); toast(`${n} Projekt(e) importiert`); go('#/'); } catch (e) { console.error(e); toast('Import fehlgeschlagen: ' + e.message, 5000); } };
+  inp.onchange = async () => { const f = inp.files[0]; inp.value = ''; if (f) await importProjectDialog(f); };
   $('#inst').onclick = async () => { if (installEvt) { installEvt.prompt(); installEvt = null; } };
 }
 

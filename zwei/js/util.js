@@ -108,7 +108,7 @@ export function downloadBlob(blob, name) {
 function fileTypeFor(blob, name) {
   if (blob && blob.type) return blob.type;
   if (/\.pdf$/i.test(name)) return 'application/pdf';
-  if (/\.zip$/i.test(name)) return 'application/zip';
+  if (/\.zip$/i.test(name) || /\.baudoku$/i.test(name)) return 'application/zip';
   return 'application/octet-stream';
 }
 

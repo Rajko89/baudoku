@@ -29,7 +29,7 @@ try {
   const mainSw = await probe.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), base + 'sw.js');
   const zweiSw = await probe.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), base + 'zwei/sw.js');
   assert.match(mainSw, /baudoku-v1\.7\.9/);
-  assert.match(zweiSw, /baudoku2-v1\.8\.1/);
+  assert.match(zweiSw, /baudoku2-v1\.9\.0/);
   await probe.close();
   for (const [tag, viewport] of [['phone', { width: 390, height: 844 }], ['tablet', { width: 820, height: 1180 }]]) {
     const page = await (await browser.newContext({ viewport, locale: 'de-DE', hasTouch: true })).newPage();

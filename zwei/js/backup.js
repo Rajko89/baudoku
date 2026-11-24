@@ -1,6 +1,7 @@
 // Datensicherung: Export/Import als ZIP (data.json + Bilder) oder JSON (ohne Bilder)
 import * as db from './db.js';
 import { uid } from './util.js';
+import { decideImport, mergeCatalog } from './transfer.js';
 const BLOBS = ['original', 'stamped', 'thumb'];
 const ext = t => (t && t.includes('png') ? 'png' : t && t.includes('webp') ? 'webp' : 'jpg');
 
@@ -27,6 +28,72 @@ export async function exportZip(projectIds) {
   }
   zip.file('data.json', JSON.stringify(out, null, 1));
   return zip.generateAsync({ type: 'blob', compression: 'STORE', mimeType: 'application/zip' });
+}
+
+export async function loadBackup(file) {
+  let data, zip = null;
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  if (head[0] === 0x50 && head[1] === 0x4b) {
+    zip = await window.JSZip.loadAsync(file);
+    const f = zip.file('data.json');
+    if (!f) throw new Error('data.json fehlt in der Datei');
+    data = JSON.parse(await f.async('string'));
+  } else data = JSON.parse(await file.text());
+  if (data.format !== 'baudoku-backup') throw new Error('Keine Baudoku-Datei');
+  const rows = [];
+  for (const p of data.projects || []) {
+    const existing = await db.get('projects', p.id);
+    rows.push({ project: p, existing, decision: decideImport(existing, p) });
+  }
+  return { data, zip, rows };
+}
+
+async function blobOf(zip, ref) {
+  if (!ref || !ref.file) return null;
+  const f = zip && zip.file(ref.file);
+  if (!f) return null;
+  return new Blob([await f.async('arraybuffer')], { type: ref.type || 'image/jpeg' });
+}
+
+export async function importOne(loaded, projectId, mode) {
+  const row = loaded.rows.find((r) => r.project.id === projectId);
+  if (!row) throw new Error('Projekt fehlt in der Datei');
+  if (mode === 'replace' && !row.decision.allowReplace) throw new Error('Die Datei ist nicht neuer als das vorhandene Projekt.');
+  const copy = mode === 'copy';
+  if (mode === 'replace') await db.deleteProject(projectId);
+  const exists = copy;
+  const { data, zip } = loaded;
+  const p = row.project;
+  const map = new Map();
+  const nid = (id) => { if (!id) return id; if (!exists) return id; if (!map.has(id)) map.set(id, uid()); return map.get(id); };
+  const proj = { ...p, id: nid(p.id) };
+  if (copy) proj.name = (p.name || 'Projekt') + ' (Kopie)';
+  for (const ph of (data.photos || []).filter((x) => x.projectId === p.id)) {
+    const rec = { ...ph, id: nid(ph.id), projectId: proj.id };
+    for (const k of BLOBS) rec[k] = await blobOf(zip, ph[k]);
+    if (!rec.original) continue;
+    if (!rec.stamped) rec.stamped = rec.original;
+    if (!rec.thumb) rec.thumb = rec.stamped;
+    if (rec.measure?.items) rec.measure.items = rec.measure.items.map((it) => ({ ...it, aufmassId: it.aufmassId ? nid(it.aufmassId) : null }));
+    await db.put('photos', rec);
+  }
+  for (const nt of (data.notes || []).filter((x) => x.projectId === p.id)) await db.put('notes', { ...nt, id: nid(nt.id), projectId: proj.id, photoId: nid(nt.photoId) || null });
+  for (const r of (data.aufmass || []).filter((x) => x.projectId === p.id)) await db.put('aufmass', { ...r, id: nid(r.id), projectId: proj.id, photoId: nid(r.photoId) || null, sketchId: r.sketchId ? nid(r.sketchId) : null });
+  for (const sk of (data.sketches || []).filter((x) => x.projectId === p.id)) {
+    const rec = { ...sk, id: nid(sk.id), projectId: proj.id };
+    rec.sourceImage = await blobOf(zip, sk.sourceImage);
+    rec.edges = (rec.edges || []).map((e) => ({ ...e, aufmassId: e.aufmassId ? nid(e.aufmassId) : null }));
+    rec.faces = (rec.faces || []).map((f) => ({ ...f, aufmassId: f.aufmassId ? nid(f.aufmassId) : null }));
+    await db.put('sketches', rec);
+  }
+  for (const sh of (data.sheets || []).filter((x) => x.projectId === p.id)) await db.put('sheets', { ...sh, id: nid(sh.id), projectId: proj.id });
+  for (const ofr of (data.offers || []).filter((x) => x.projectId === p.id)) await db.put('offers', { ...ofr, id: nid(ofr.id), projectId: proj.id });
+  if (proj.coverPhotoId) proj.coverPhotoId = nid(proj.coverPhotoId);
+  await db.put('projects', proj);
+  const localCatalog = await db.all('catalog').catch(() => []);
+  const merged = mergeCatalog(localCatalog, data.catalog || []);
+  for (const item of merged.added) await db.put('catalog', item);
+  return { id: proj.id, addedCatalog: merged.added.length };
 }
 
 export async function importFile(file) {
