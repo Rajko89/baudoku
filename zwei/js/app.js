@@ -9,11 +9,11 @@ import { buildPdf, buildOfferPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
 import { resyncProjectSketches } from './sketch.js';
 import { mountDraw } from './draw.js';
-import { sketchProposals, importLegacyStrokes, importLegacySketch, partSummary } from './plan.js';
+import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { mergeSeed, quantitiesFromDocs, syncServiceRows, blankOffer, refreshOffer, includeSuggested, setItemState, patchItem, adoptCatalog, writeBackCatalog, setManualQty, addManualItem, moveItem, finalizeOffer, reviseOffer, uncheckedTestPrices, totals, fmtEUR, fmtQty, effectiveQty, lineNet } from './catalog.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku2-v1.8.0';
+const APP_VERSION = 'baudoku2-v1.8.1';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -366,13 +366,16 @@ async function viewProject(pid, tab, q) {
 
   if (tab === 'sketches') {
     T.innerHTML = `<h2 class="sec" style="text-transform:none;color:inherit;font-size:1.25rem">Skizze</h2>
-      <div class="grid2"><button class="btn" id="editPhotos">Foto bearbeiten</button><button class="btn primary" id="newSheet">Neue Skizze auf leerem Blatt</button></div>
-      <p class="small">Freie Skizze (leeres Blatt) und Zeichnen auf einem Foto nutzen denselben Editor. Flächenskizzen aus älteren Versionen öffnen sich ebenfalls dort.</p>
+      <div class="grid2"><button class="btn primary" id="newSheet">Leeres Blatt</button><button class="btn" id="copySketch">Skizze übernehmen</button></div>
+      <button class="btn block" id="editPhotos" style="margin-top:8px">Foto bearbeiten</button>
+      <div id="copyBox"></div>
+      <p class="small">Freie Skizze (leeres Blatt) und Zeichnen auf einem Foto nutzen denselben Editor. Eine übernommene Skizze ist eine eigene Kopie. Angebote werden nicht mitkopiert.</p>
       <div id="sheetList" style="margin-top:10px">${sheets.map(s => `<div class="card" style="display:flex;align-items:center;gap:8px"><div class="meta" style="flex:1" data-nav="#/sheet/${s.id}"><div class="t">${esc(s.title || 'Freie Skizze')}</div><div class="small">${(s.strokes || []).length} Striche</div></div><button type="button" class="btn danger del" data-del-sheet="${s.id}">Löschen</button></div>`).join('') || '<p class="small">Noch kein leeres Blatt.</p>'}
       <h3 class="sec">Flächenskizze</h3>
       <div id="skList">${sketches.map(s => `<div class="card" data-nav="#/sketch/${s.id}"><div class="meta"><div class="t">${esc(s.title || 'Flächenskizze')}</div><div class="small">${(s.faces || []).length} Flächen · ${(s.edges || []).length} Kanten</div></div></div>`).join('') || '<p class="small">Keine ältere Flächenskizze.</p>'}</div>`;
     $('#editPhotos').onclick = () => go(`#/p/${pid}?tab=photos`);
     $('#newSheet').onclick = () => newSheet(pid);
+    $('#copySketch').onclick = () => copySketchFlow(pid);
   }
 
   if (tab === 'angebot') {
@@ -678,7 +681,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku 2 · v1.8.0 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p>
+    <p class="small">Baudoku 2 · v1.8.1 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p>
     <p class="small"><a href="#/katalog">Leistungskatalog</a> · Testpreise vor der Verwendung prüfen. Keine Firmendaten sind voreingestellt.</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
@@ -711,6 +714,69 @@ async function viewSettings() {
   $('#inst').onclick = async () => { if (installEvt) { installEvt.prompt(); installEvt = null; } };
 }
 
+function projectSketches(projectId, sheets, sketches, photos) {
+  return [
+    ...sheets.filter((s) => s.projectId === projectId).map((s) => ({ kind: 'sheet', id: s.id, title: s.title || 'Freie Skizze', detail: 'Blatt' })),
+    ...sketches.filter((s) => s.projectId === projectId).map((s) => ({ kind: 'sketch', id: s.id, title: s.title || 'Flächenskizze', detail: 'Flächenskizze' })),
+    ...photos.filter((p) => p.projectId === projectId && (p.markup?.doc || (p.markup?.strokes || []).length)).map((p) => ({ kind: 'photo', id: p.id, title: p.caption || 'Foto-Skizze', detail: 'Foto' })),
+  ];
+}
+async function cloneBlob(b) {
+  if (!b) return null;
+  return new Blob([await b.arrayBuffer()], { type: b.type || 'image/jpeg' });
+}
+async function storeSketchCopy(pid, kind, id, title) {
+  let nav;
+  if (kind === 'sheet') {
+    const src = await db.get('sheets', id);
+    const doc = cloneSketchDoc(src?.doc || importLegacyStrokes(src?.strokes || []));
+    const sheet = { id: uid(), projectId: pid, created: Date.now(), updated: Date.now(), title, width: src?.width || 1000, height: src?.height || 1400, doc, strokes: legacyStrokes(doc) };
+    await db.put('sheets', sheet);
+    nav = `#/sheet/${sheet.id}`;
+  } else if (kind === 'sketch') {
+    const src = await db.get('sketches', id);
+    const doc = cloneSketchDoc(src?.doc || importLegacySketch(src || {}, src?.imgW, src?.imgH));
+    const rec = { id: uid(), projectId: pid, created: Date.now(), updated: Date.now(), title, doc, sourceImage: await cloneBlob(src?.sourceImage), imgW: src?.imgW, imgH: src?.imgH, faces: [], edges: [], vertices: [] };
+    await db.put('sketches', rec);
+    nav = `#/sketch/${rec.id}`;
+  } else {
+    const src = await db.get('photos', id);
+    const doc = cloneSketchDoc(src?.markup?.doc || importLegacyStrokes(src?.markup?.strokes || []));
+    const original = await cloneBlob(src?.original);
+    const photo = {
+      id: uid(), projectId: pid, created: Date.now(), time: src?.time || Date.now(), timeKind: src?.timeKind || 'copy',
+      lat: src?.lat ?? null, lon: src?.lon ?? null, acc: src?.acc ?? null, address: src?.address || '', caption: title, source: 'copy',
+      original, stamped: await cloneBlob(src?.stamped || src?.original), thumb: await cloneBlob(src?.thumb || src?.stamped || src?.original),
+      markup: { doc, hidePhoto: !!src?.markup?.hidePhoto, strokes: legacyStrokes(doc) },
+    };
+    await db.put('photos', photo);
+    nav = `#/draw/${photo.id}`;
+  }
+  await syncServices(pid);
+  return nav;
+}
+async function copySketchFlow(pid) {
+  const box = $('#copyBox');
+  if (!box) return;
+  const [projects, sheets, sketches, photos] = await Promise.all([db.all('projects'), db.all('sheets'), db.all('sketches'), db.all('photos')]);
+  const rows = projects.map((p) => ({ p, items: projectSketches(p.id, sheets, sketches, photos) })).filter((r) => r.items.length);
+  box.innerHTML = `<h3 class="sec">Projekt wählen</h3><p class="small">Nur Projekte mit mindestens einer Skizze. Das aktuelle Projekt nur zum Duplizieren, wenn darin schon eine Skizze liegt. Angebote werden nicht kopiert.</p>${rows.map((r) => `<button type="button" class="btn block" data-copy-project="${esc(r.p.id)}">${esc(r.p.name)}${r.p.id === pid ? ' · dieses Projekt' : ''}</button>`).join('') || '<p>Noch keine Skizze zum Übernehmen.</p>'}`;
+  box.querySelectorAll('[data-copy-project]').forEach((btn) => btn.onclick = () => {
+    const row = rows.find((r) => r.p.id === btn.dataset.copyProject);
+    box.innerHTML = `<h3 class="sec">Skizze wählen</h3><p class="small">${esc(row.p.name)}</p>${row.items.map((s) => `<button type="button" class="btn block" data-copy-kind="${esc(s.kind)}" data-copy-id="${esc(s.id)}" data-title="${esc(s.title)}">${esc(s.title)} <span class="small">${esc(s.detail)}</span></button>`).join('')}<button type="button" class="btn block" id="copyBack">Zurück zur Projektauswahl</button>`;
+    $('#copyBack').onclick = () => copySketchFlow(pid);
+    box.querySelectorAll('[data-copy-id]').forEach((b) => b.onclick = async () => {
+      const suggested = `${b.dataset.title || 'Skizze'} (übernommen aus ${row.p.name})`;
+      const named = await modal({ title: 'Skizze übernehmen', html: '<p>Die Kopie ist unabhängig. Verknüpfte Leistungen bleiben erhalten, Angebote nicht.</p>', fields: [{ name: 'title', label: 'Titel', value: suggested }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Übernehmen', value: 'ok', cls: 'primary' }] });
+      if (!named) return;
+      const title = (named.title || '').trim() || suggested;
+      const nav = await storeSketchCopy(pid, b.dataset.copyKind, b.dataset.copyId, title);
+      await touchProject(pid);
+      toast('Skizze übernommen');
+      go(nav);
+    });
+  });
+}
 async function newSheet(pid) {
   const r = await modal({ title: 'Freie Skizze', html: '<p>Leeres Blatt zum Zeichnen. Der Titel ist freiwillig.</p>', fields: [{ name: 'title', label: 'Titel (optional)', placeholder: 'Freie Skizze' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Blatt anlegen', value: 'ok', cls: 'primary' }] });
   if (!r) return;

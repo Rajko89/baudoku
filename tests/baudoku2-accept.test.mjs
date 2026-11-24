@@ -168,18 +168,18 @@ test('I erneutes Laden erzeugt die zehn Positionen nicht noch einmal', () => {
   assert.equal(dimensionCaption(d.edges[0], twice), 'Blende · 10,00 m');
 });
 
-test('J die Haupt-App ist v1.7.8 und Baudoku 2 bleibt v1.8.0', () => {
+test('J die Haupt-App ist v1.7.9 und Baudoku 2 ist v1.8.1', () => {
   const mainSw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
   const zweiSw = readFileSync(new URL('../zwei/sw.js', import.meta.url), 'utf8');
   const mainApp = readFileSync(new URL('../js/app.js', import.meta.url), 'utf8');
   const zweiDraw = readFileSync(new URL('../zwei/js/draw.js', import.meta.url), 'utf8');
-  assert.match(mainSw, /baudoku-v1\.7\.8/);
-  assert.doesNotMatch(mainSw, /v1\.8\.0/);
+  assert.match(mainSw, /baudoku-v1\.7\.9/);
+  assert.doesNotMatch(mainSw, /baudoku2/);
   assert.doesNotMatch(zweiDraw, /#F57C00/);
-  assert.doesNotMatch(zweiDraw, /Orange/);
+  assert.doesNotMatch(zweiDraw, /name: 'Orange'/);
   assert.doesNotMatch(mainApp, /cat-seed-01/);
   assert.doesNotMatch(mainApp, /Leistungskatalog/);
-  assert.match(zweiSw, /baudoku2-v1\.8\.0/);
+  assert.match(zweiSw, /baudoku2-v1\.8\.1/);
   assert.doesNotMatch(zweiSw, /baudoku-v1\.7\.7/);
 });
 

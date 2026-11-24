@@ -1,0 +1,73 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { emptyDoc, addLine, setMeasure, setEdgeStyle, setEdgeName, splitEdgeAt, addText, setTextAngle, addShape, patchShape, addStroke, cloneSketchDoc } from '../js/plan.js';
+import { setEdgeAssignment, setFaceAssignment, addPiece, cloneSketchDoc as clone2 } from '../zwei/js/plan.js';
+
+function sample() {
+  let d = emptyDoc();
+  d = addLine(d, { x: 0, y: 0 }, { x: 1, y: 0 });
+  d = setMeasure(d, d.edges[0].id, 8.5, 'm');
+  d = setEdgeStyle(d, d.edges[0].id, { color: '#F57C00', dash: true });
+  d = setEdgeName(d, d.edges[0].id, 'Dachrinne');
+  d = splitEdgeAt(d, d.edges[0].id, 0.5);
+  d = addText(d, 0.4, 0.2, 'Hinweis');
+  d = setTextAngle(d, d.texts[0].id, 0.4);
+  d = addShape(d, { kind: 'arrow', x: 0.1, y: 0.2, x2: 0.4, y2: 0.5, color: '#e03131', text: 'Attika' });
+  d = patchShape(d, d.shapes[0].id, { side: -1 });
+  d = addStroke(d, [[0.1, 0.1], [0.2, 0.2]], { color: '#111111', width: 0.02 });
+  d.pen = { color: '#1864ab', width: 0.012 };
+  const a = d.nodes[0];
+  const b = d.nodes[1];
+  d.faceMeta = { [[a.id, b.id].sort().join(',')]: { name: 'Dach', services: [{ catalogId: 'cat-seed-04' }], areaKind: 'slope' } };
+  d.faceOffsets = [{ sig: [a.id, b.id].sort().join(','), dx: 0.01, dy: 0 }];
+  return d;
+}
+
+test('Haupt-App: Kopie ist unabhängig, Inhalt bleibt', () => {
+  const doc = sample();
+  const before = JSON.stringify(doc);
+  const copy = cloneSketchDoc(doc);
+  assert.notEqual(copy.edges[0].id, doc.edges[0].id);
+  assert.equal(copy.edges.find((e) => e.label === 'a1').name, 'Dachrinne');
+  assert.equal(copy.edges.find((e) => e.label === 'a1').color, '#F57C00');
+  assert.equal(copy.edges.find((e) => e.label === 'a1').dash, true);
+  assert.equal(copy.edges.find((e) => e.label === 'a1').measure.value, 4.25);
+  const groups = new Set(copy.edges.map((e) => e.group).filter(Boolean));
+  assert.equal(groups.size, 1);
+  assert.notEqual([...groups][0], doc.edges.find((e) => e.group).group);
+  assert.equal(copy.texts[0].text, 'Hinweis');
+  assert.equal(copy.texts[0].ang, 0.4);
+  assert.notEqual(copy.texts[0].id, doc.texts[0].id);
+  assert.equal(copy.shapes[0].text, 'Attika');
+  assert.equal(copy.shapes[0].side, -1);
+  assert.equal(copy.strokes[0].color, '#111111');
+  assert.deepEqual(copy.pen, doc.pen);
+  const sig = Object.keys(copy.faceMeta)[0];
+  assert.notEqual(sig, Object.keys(doc.faceMeta)[0]);
+  assert.equal(copy.faceMeta[sig].services[0].catalogId, 'cat-seed-04');
+  assert.equal(copy.faceOffsets[0].sig, sig);
+  copy.edges[0].measure.value = 1;
+  copy.edges[0].name = 'Geändert';
+  copy.texts[0].text = 'anders';
+  assert.equal(JSON.stringify(doc), before);
+});
+
+test('Baudoku 2: Leistungen bleiben, IDs sind neu', () => {
+  let d = emptyDoc();
+  d = addLine(d, { x: 0, y: 0 }, { x: 1, y: 0 });
+  d = setEdgeAssignment(d, d.edges[0].id, { name: 'Blende', services: [{ catalogId: 'cat-seed-01' }, { catalogId: 'cat-seed-01' }], labelMode: 'short' });
+  d = addPiece(d, 0.2, 0.3, 'Lüfter 1');
+  d = setEdgeAssignment(d, d.edges[0].id, {});
+  const pieceId = d.pieces[0].id;
+  d.pieces[0].services = [{ catalogId: 'cat-seed-09' }];
+  const before = JSON.stringify(d);
+  const copy = clone2(d);
+  assert.notEqual(copy.edges[0].id, d.edges[0].id);
+  assert.notEqual(copy.pieces[0].id, pieceId);
+  assert.deepEqual(copy.edges[0].services, [{ catalogId: 'cat-seed-01' }]);
+  assert.equal(copy.edges[0].labelMode, 'short');
+  assert.equal(copy.pieces[0].services[0].catalogId, 'cat-seed-09');
+  copy.edges[0].services[0].catalogId = 'cat-seed-08';
+  copy.pieces[0].name = 'anders';
+  assert.equal(JSON.stringify(d), before);
+});

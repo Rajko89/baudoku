@@ -1151,3 +1151,48 @@ export function sketchProposals(doc) {
   }));
   return { sides, areas };
 }
+
+/** Unabhängige Kopie: neue IDs, gleicher Inhalt. Katalog-IDs bleiben. */
+export function cloneSketchDoc(doc) {
+  const d = JSON.parse(JSON.stringify(doc || emptyDoc()));
+  const map = new Map();
+  const fresh = (old) => {
+    if (old == null || old === '') return old;
+    const key = String(old);
+    if (!map.has(key)) map.set(key, 'k' + map.size + '-' + Math.random().toString(36).slice(2, 10));
+    return map.get(key);
+  };
+  for (const n of d.nodes || []) n.id = fresh(n.id);
+  for (const e of d.edges || []) {
+    e.id = fresh(e.id);
+    if (e.a) e.a = fresh(e.a);
+    if (e.b) e.b = fresh(e.b);
+    if (e.group) e.group = fresh(e.group);
+    if (e.chain) e.chain = fresh(e.chain);
+  }
+  for (const s of d.strokes || []) s.id = fresh(s.id);
+  for (const t of d.texts || []) t.id = fresh(t.id);
+  for (const s of d.shapes || []) s.id = fresh(s.id);
+  for (const p of d.pieces || []) p.id = fresh(p.id);
+  for (const r of d.rights || []) {
+    if (r.id) r.id = fresh(r.id);
+    if (r.node) r.node = fresh(r.node);
+    if (r.e1) r.e1 = fresh(r.e1);
+    if (r.e2) r.e2 = fresh(r.e2);
+  }
+  for (const p of d.parallels || []) {
+    if (p.id) p.id = fresh(p.id);
+    if (p.e1) p.e1 = fresh(p.e1);
+    if (p.e2) p.e2 = fresh(p.e2);
+  }
+  for (const c of d.chains || []) if (c.id) c.id = fresh(c.id);
+  for (const s of d.seq || []) if (s.id) s.id = fresh(s.id);
+  const remapSig = (sig) => String(sig || '').split(',').filter(Boolean).map((id) => map.get(id) || id).join(',');
+  for (const f of d.faceOffsets || []) f.sig = remapSig(f.sig);
+  if (d.faceMeta && typeof d.faceMeta === 'object') {
+    const next = {};
+    for (const [sig, meta] of Object.entries(d.faceMeta)) next[remapSig(sig)] = meta;
+    d.faceMeta = next;
+  }
+  return d;
+}
