@@ -52,33 +52,36 @@ try {
   await page.screenshot({ path: join(art, 'baudoku-haupt.png') });
   assert.deepEqual(await names('baudoku'), ['Nur Haupt']);
 
-  await page.goto(zwei);
-  await page.locator('h1', { hasText: 'Baudoku 2' }).waitFor();
-  assert.equal(await page.locator('body').innerText().then((t) => t.includes('Nur Haupt')), false);
-  await page.screenshot({ path: join(art, 'baudoku-2.png') });
-  await page.locator('button', { hasText: 'Neues Projekt' }).click();
-  await page.locator('input[name="name"]').fill('Nur Zwei');
-  await page.locator('#pf button[type="submit"]').click();
-  await page.locator('.hdr button[aria-label="Zurück"]').click();
-  await page.getByText('Nur Zwei', { exact: true }).waitFor();
-  assert.equal(await page.locator('body').innerText().then((t) => t.includes('Nur Haupt')), false);
-  assert.deepEqual((await names('baudoku-2')).sort(), ['Nur Zwei']);
-  assert.deepEqual(await names('baudoku'), ['Nur Haupt']);
-
-  await page.goto(base);
-  await page.getByText('Nur Haupt', { exact: true }).waitFor();
-  assert.equal(await page.locator('body').innerText().then((t) => t.includes('Nur Zwei')), false);
-  const mainSw = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), base + 'sw.js');
-  const zweiSw = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), zwei + 'sw.js');
-  assert.match(mainSw, /baudoku-v1\.7\.9/);
-  assert.match(mainSw, /\/zwei\//);
-  assert.match(zweiSw, /baudoku2-v1\.9\.0/);
-  assert.doesNotMatch(zweiSw, /pathname\.includes\('\/zwei\/'\)/);
-  assert.equal(errors.length, 0, errors.join('\n'));
+  await page.goto(base + '#/settings');
+  await page.locator('input[name="bearbeiter"]').waitFor();
+  assert.equal(await page.locator('input[name="bearbeiter"]').inputValue(), '');
+  await page.screenshot({ path: join(art, 'baudoku-einstellungen-390.png') });
   await page.close();
+
+  const tablet = await (await browser.newContext({ viewport: { width: 820, height: 1180 }, locale: 'de-DE' })).newPage();
+  tablet.on('pageerror', (e) => errors.push(String(e)));
+  await tablet.goto(base + '#/settings');
+  await tablet.locator('input[name="bearbeiter"]').waitFor();
+  assert.equal(await tablet.locator('input[name="bearbeiter"]').inputValue(), '');
+  await tablet.screenshot({ path: join(art, 'baudoku-einstellungen-820.png') });
+  const mainSw = await tablet.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), base + 'sw.js');
+  const zweiSw = await tablet.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), zwei + 'sw.js');
+  const zweiSeite = await tablet.evaluate(async (url) => {
+    const res = await fetch(url, { cache: 'no-store' });
+    return { status: res.status, text: await res.text() };
+  }, zwei);
+  assert.match(mainSw, /baudoku-v1\.7\.10/);
+  assert.match(mainSw, /startsWith\('baudoku-'\)/);
+  assert.match(mainSw, /\/gaeb\//);
+  assert.match(mainSw, /\/zwei\//);
+  assert.match(zweiSw, /unregister/);
+  assert.match(zweiSw, /startsWith\('baudoku2-'\)/);
+  assert.doesNotMatch(zweiSeite.text, /Neues Projekt/);
+  assert.equal(errors.length, 0, errors.join('\n'));
+  await tablet.close();
 } finally {
   await browser.close();
   child.kill();
 }
 
-test('the two apps keep separate data', () => assert.ok(true));
+test('Haupt-App behält ihr Projekt und lässt den Bearbeiter leer', () => assert.ok(true));

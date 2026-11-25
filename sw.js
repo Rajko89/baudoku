@@ -1,7 +1,7 @@
 // Service Worker: App-Shell offline verfügbar (Cache-first), Daten liegen in IndexedDB.
 // Alle URLs werden relativ zum Skript aufgelöst, damit die App unter einem Unterpfad
 // (z. B. https://rajko89.github.io/baudoku/) funktioniert.
-const VERSION = 'baudoku-v1.7.9';
+const VERSION = 'baudoku-v1.7.10';
 const ASSET_PATHS = [
   './',
   './index.html',
@@ -36,7 +36,7 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys()
-      .then((ks) => Promise.all(ks.filter((k) => k !== VERSION).map((k) => caches.delete(k))))
+      .then((ks) => Promise.all(ks.filter((k) => k.startsWith('baudoku-') && k !== VERSION).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
       .then(() => self.clients.matchAll({ type: 'window', includeUncontrolled: true }))
       .then((cs) => cs.forEach((c) => c.postMessage({ type: 'NEW_VERSION', version: VERSION })))
@@ -49,7 +49,7 @@ self.addEventListener('fetch', (e) => {
   const u = new URL(e.request.url);
   if (e.request.method !== 'GET' || u.origin !== self.location.origin) return; // z. B. Nominatim: direkt ans Netz
   if (u.pathname.endsWith('/sw.js')) return; // Update-Prüfung darf nicht aus dem App-Cache kommen
-  if (u.pathname.includes('/zwei/')) return; // Zweit-App hat eigenen Service Worker und eigenen Cache
+  if (u.pathname.includes('/zwei/') || u.pathname.includes('/gaeb/')) return;
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const hit = await cache.match(e.request, { ignoreSearch: true });

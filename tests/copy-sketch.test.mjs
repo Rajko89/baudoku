@@ -1,8 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { emptyDoc, addLine, setMeasure, setEdgeStyle, setEdgeName, splitEdgeAt, addText, setTextAngle, addShape, patchShape, addStroke, cloneSketchDoc } from '../js/plan.js';
-import { setEdgeAssignment, setFaceAssignment, addPiece, cloneSketchDoc as clone2 } from '../zwei/js/plan.js';
-
 function sample() {
   let d = emptyDoc();
   d = addLine(d, { x: 0, y: 0 }, { x: 1, y: 0 });
@@ -50,24 +48,4 @@ test('Haupt-App: Kopie ist unabhängig, Inhalt bleibt', () => {
   copy.edges[0].name = 'Geändert';
   copy.texts[0].text = 'anders';
   assert.equal(JSON.stringify(doc), before);
-});
-
-test('Baudoku 2: Leistungen bleiben, IDs sind neu', () => {
-  let d = emptyDoc();
-  d = addLine(d, { x: 0, y: 0 }, { x: 1, y: 0 });
-  d = setEdgeAssignment(d, d.edges[0].id, { name: 'Blende', services: [{ catalogId: 'cat-seed-01' }, { catalogId: 'cat-seed-01' }], labelMode: 'short' });
-  d = addPiece(d, 0.2, 0.3, 'Lüfter 1');
-  d = setEdgeAssignment(d, d.edges[0].id, {});
-  const pieceId = d.pieces[0].id;
-  d.pieces[0].services = [{ catalogId: 'cat-seed-09' }];
-  const before = JSON.stringify(d);
-  const copy = clone2(d);
-  assert.notEqual(copy.edges[0].id, d.edges[0].id);
-  assert.notEqual(copy.pieces[0].id, pieceId);
-  assert.deepEqual(copy.edges[0].services, [{ catalogId: 'cat-seed-01' }]);
-  assert.equal(copy.edges[0].labelMode, 'short');
-  assert.equal(copy.pieces[0].services[0].catalogId, 'cat-seed-09');
-  copy.edges[0].services[0].catalogId = 'cat-seed-08';
-  copy.pieces[0].name = 'anders';
-  assert.equal(JSON.stringify(d), before);
 });

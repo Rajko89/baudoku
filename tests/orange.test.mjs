@@ -23,10 +23,9 @@ test('Orange steht in der Palette und bleibt an der Linie gespeichert', () => {
   doc = addLine(doc, { x: 0, y: 0 }, { x: 1, y: 0 });
   doc = setEdgeStyle(doc, doc.edges[0].id, { color: ORANGE });
   assert.equal(doc.edges[0].color, ORANGE);
-  const zwei = readFileSync(new URL('../zwei/js/draw.js', import.meta.url), 'utf8');
-  const zweiSw = readFileSync(new URL('../zwei/sw.js', import.meta.url), 'utf8');
-  assert.doesNotMatch(zwei, /#F57C00/);
-  assert.match(zweiSw, /baudoku2-v1\.9\.0/);
+  const mainSw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
+  assert.match(mainSw, /baudoku-v1\.7\.10/);
+  assert.match(mainSw, /\/gaeb\//);
 });
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');

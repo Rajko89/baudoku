@@ -98,8 +98,11 @@ try {
   const haupt = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/sw.js`);
   const zwei = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/zwei/sw.js`);
   assert.match(sw, /gaeb-v1\.0\.1/);
-  assert.match(haupt, /baudoku-v1\.7\.9/);
-  assert.match(zwei, /baudoku2-v1\.9\.0/);
+  assert.match(haupt, /baudoku-v1\.7\.10/);
+  assert.match(haupt, /\/gaeb\//);
+  assert.match(zwei, /unregister/);
+  assert.match(zwei, /baudoku2-/);
+  assert.doesNotMatch(zwei, /caches\.delete\(k\)/);
   assert.equal(errors.length, 0, errors.join('\n'));
   await page.close();
 } finally {

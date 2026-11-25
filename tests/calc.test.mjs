@@ -157,8 +157,13 @@ test('repo contains no hardcoded company preset', () => {
       if (st.isDirectory()) walk(p);
       else if (st.size < 2_000_000) {
         const text = readFileSync(p);
-        const needle = Buffer.from([77, 101, 115, 99, 104, 101, 100, 101]);
-        if (text.includes(needle)) hits.push(p);
+        const needles = [
+          Buffer.from([77, 101, 115, 99, 104, 101, 100, 101]),
+          Buffer.from([82, 117, 98, 101, 110, 32, 66, 108, 101, 99, 107, 109, 97, 110, 110]),
+          Buffer.from([82, 117, 98, 101, 110]),
+          Buffer.from([66, 108, 101, 99, 107, 109, 97, 110, 110]),
+        ];
+        if (needles.some((needle) => text.includes(needle))) hits.push(p);
       }
     }
   };

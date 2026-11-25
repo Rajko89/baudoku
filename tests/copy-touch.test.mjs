@@ -22,7 +22,7 @@ await new Promise((r) => setTimeout(r, 250));
 const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
 const errors = [];
 try {
-  for (const app of [{ id: 'haupt', url: base }, { id: 'zwei', url: base + 'zwei/' }]) {
+  for (const app of [{ id: 'haupt', url: base }]) {
     for (const [tag, viewport] of [['phone', { width: 390, height: 844 }], ['tablet', { width: 820, height: 1180 }]]) {
       const page = await (await browser.newContext({ viewport, locale: 'de-DE', hasTouch: true })).newPage();
       page.on('pageerror', (e) => errors.push(app.id + ' ' + tag + ' ' + e));

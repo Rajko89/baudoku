@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.7.9';
+const APP_VERSION = 'baudoku-v1.7.10';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -480,7 +480,7 @@ async function viewSettings() {
   const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
   APP.innerHTML = header('Einstellungen', { back: '#/' }) + `<main><form class="card" id="sf">
     <label class="f">Firma (Stempel/PDF, optional)<input name="firma" value="${esc(s.firma)}" placeholder="Leer lassen oder eigenen Namen eintragen"></label>
-    <label class="f">Bearbeiter<input name="bearbeiter" value="${esc(s.bearbeiter)}"></label>
+    <label class="f">Bearbeiter<input name="bearbeiter" value="${esc(s.bearbeiter)}" placeholder="Leer lassen oder Namen eintragen"></label>
     <label class="chk"><input type="checkbox" name="stampFirma" ${s.stampFirma ? 'checked' : ''}> Firma im Fotostempel</label>
     <label class="chk"><input type="checkbox" name="geocode" ${s.geocode ? 'checked' : ''}> Adresse online ermitteln (OpenStreetMap)</label>
     <label class="chk"><input type="checkbox" name="pdfStamped" ${s.pdfStamped ? 'checked' : ''}> PDF standardmäßig mit Stempel</label>
@@ -493,7 +493,7 @@ async function viewSettings() {
     ${ios ? 'Installieren: in Safari „Teilen“ → „Zum Home-Bildschirm“.' : 'Installieren: Browser-Menü → „App installieren“ / „Zum Startbildschirm hinzufügen“.'}<br>
     Kamera, GPS und Offline-Modus benötigen HTTPS (oder localhost).</p>
     <button class="btn block ${installEvt ? '' : 'hide'}" id="inst">📲 App installieren</button>
-    <p class="small">Baudoku v1.7.9 · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
+    <p class="small">Baudoku ${esc(APP_VERSION.slice('baudoku-'.length))} · Kartendaten/Adressen © OpenStreetMap-Mitwirkende</p></div></main>`;
   let headerId = HEADER_COLORS[s.header] ? s.header : 'blue';
   const readForm = () => {
     const f = $('#sf');
