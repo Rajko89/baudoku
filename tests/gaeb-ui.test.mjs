@@ -69,16 +69,35 @@ try {
   await page.getByText('Kurztext zu lang und gekürzt').waitFor();
   await page.getByText('ohne Menge').waitFor();
   await page.screenshot({ path: join(art, 'gaeb-pruefung.png') });
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('link', { name: 'P83 herunterladen' }).click(),
+  ]);
+  const gespeichert = readFileSync(await download.path());
+  const ohneCrlf = gespeichert.toString('latin1').replaceAll('\r\n', '');
+  assert.equal(ohneCrlf.includes('\n') || ohneCrlf.includes('\r'), false);
+  assert.ok(gespeichert.includes(Buffer.from('\r\n')));
+  const lfPfad = '/tmp/gaeb-ui-lf.P83';
+  writeFileSync(lfPfad, gespeichert.toString('latin1').replaceAll('\r\n', '\n'), 'latin1');
   await page.getByRole('tab', { name: 'GAEB → Excel' }).click();
-  await page.locator('#gaeb-file').setInputFiles(d83Pfad);
+  await page.locator('#gaeb-file').setInputFiles(lfPfad);
   await page.getByRole('button', { name: 'Nach Excel' }).click();
   await page.getByText('Prüfung: OK').waitFor();
-  await page.getByText('02.0010').waitFor();
+  await page.getByText('Zeilenenden sind LF').waitFor();
+  assert.equal(await page.locator('#preview .bad').count(), 0);
+  const knopf = page.getByRole('link', { name: 'Excel herunterladen' });
+  await knopf.waitFor();
+  const kasten = await knopf.boundingBox();
+  assert.ok(kasten && kasten.width > 180 && kasten.height >= 44);
+  await page.screenshot({ path: join(art, 'gaeb-import-lf.png') });
+  await page.locator('#gaeb-file').setInputFiles(d83Pfad);
+  await page.getByRole('button', { name: 'Nach Excel' }).click();
+  await page.getByText('Zeichensatz: Codepage 850').waitFor();
   await page.screenshot({ path: join(art, 'gaeb-nach-excel.png') });
   const sw = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `${base}sw.js`);
   const haupt = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/sw.js`);
   const zwei = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/zwei/sw.js`);
-  assert.match(sw, /gaeb-v1\.0\.0/);
+  assert.match(sw, /gaeb-v1\.0\.1/);
   assert.match(haupt, /baudoku-v1\.7\.9/);
   assert.match(zwei, /baudoku2-v1\.9\.0/);
   assert.equal(errors.length, 0, errors.join('\n'));

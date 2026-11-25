@@ -1,5 +1,5 @@
 // Eigener Cache nur für /gaeb/. Löscht keine Caches von Baudoku oder Baudoku 2.
-const VERSION = 'gaeb-v1.0.0';
+const VERSION = 'gaeb-v1.0.1';
 const ASSET_PATHS = [
   './',
   './index.html',

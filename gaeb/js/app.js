@@ -124,9 +124,11 @@ function zeichne(titel, lv, extra) {
   for (const h of extra.hinweise || []) box.append(zeile('p', h, 'warn'));
   if (extra.ok) box.append(zeile('p', extra.ok, 'ok'));
   for (const r of extra.reparse || []) box.append(zeile('p', r, 'bad'));
-  if (extra.downloads && extra.downloads.length && !(extra.fehler || []).length) {
+  const downloadsZeigen = extra.downloads && extra.downloads.length && (extra.downloadImmer || !(extra.fehler || []).length);
+  if (downloadsZeigen) {
     const row = document.createElement('div');
     row.className = 'downloads';
+    row.id = 'downloads';
     for (const d of extra.downloads) row.append(downloadKnopf(d.bytes, d.name, d.mime, d.label));
     box.append(row);
   }
@@ -270,11 +272,13 @@ $('gaeb-form').addEventListener('submit', async (e) => {
   const name = basisname(gaebDatei.name);
   let gelesen;
   const hinweise = [];
-  if (art.art === 'P') gelesen = liesP83(bytes, { phasen: ['81', '83', '84'] });
+  const leseOpt = { phasen: ['81', '83', '84'], tolerant: true };
+  if (art.art === 'P') gelesen = liesP83(bytes, leseOpt);
   else {
-    gelesen = liesD83(bytes, art.codec, { phasen: ['81', '83', '84'] });
+    gelesen = liesD83(bytes, art.codec, leseOpt);
     hinweise.push(`Zeichensatz: ${art.codec === 'cp850' ? 'Codepage 850' : 'Windows-1252'}.`);
   }
+  hinweise.push(...(gelesen.hinweise || []));
   if (gelesen.phase && gelesen.phase !== '83') hinweise.push(`Phase ${gelesen.phase}: gelesen mit dem Satzbild der Phase 83.`);
   const xlsx = schreibeXlsx(XLSX, gelesen.lv);
   const nochmal = leseMappe(XLSX, xlsx, { quelle: 'export' });
@@ -285,6 +289,7 @@ $('gaeb-form').addEventListener('submit', async (e) => {
     summe: nochmal.summe,
     reparse,
     ok: gelesen.fehler.length || reparse.length ? 'Prüfung: bitte die Meldungen lesen' : 'Prüfung: OK',
+    downloadImmer: true,
     downloads: gelesen.lv.length ? [{
       bytes: xlsx, name: `${name}.xlsx`,
       mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

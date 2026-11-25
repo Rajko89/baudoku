@@ -160,10 +160,66 @@ test('Phase 81 und 84 werden gelesen, der Schreiber bleibt bei 83', () => {
   assert.equal(d84.fehler.length, 0);
 });
 
+function nurCrlf(bytes) {
+  const rest = Buffer.from(bytes).toString('latin1').replaceAll('\r\n', '');
+  assert.equal(rest.includes('\n') || rest.includes('\r'), false);
+}
+
+test('Mehrzeilige Langtexte mit Umlauten bleiben erhalten und die Datei hat nur CRLF', () => {
+  const lang = 'Dämmung an der Straße liefern.\nFuge mit ß und Größe schließen.';
+  const zeilen = [[
+    'OZ', 'Kurztext', 'Langtext', 'Menge', 'Einheit', 'EP', 'GP', 'Positionsart',
+  ], ['03', 'Ausbau', '', '', '', '', '', 'Abschnitt'], [
+    '03.0010', 'Dämmung an der Straße', lang, 4.5, 'm²', 12, 54, 'Normal',
+  ], [
+    '03.0020', 'Hinweis\r\nmit Umbruch', 'nur Kurztext hat den Umbruch', 1, 'St', '', '', 'Normal',
+  ]];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(zeilen), 'GAEB-Export');
+  const datei = new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }));
+  const gelesen = leseMappe(XLSX, datei, { quelle: 'export' });
+  assert.deepEqual(gelesen.fehler, []);
+  assert.equal(gelesen.lv[0].positionen[0].langtext, lang);
+  for (const art of ['D83', 'P83']) {
+    const erste = art === 'D83'
+      ? schreibeD83(gelesen.lv, kopf, 'cp850', 'null', true, [])
+      : schreibeP83(gelesen.lv, kopf, 'null', []);
+    nurCrlf(erste.bytes);
+    const streng = art === 'D83' ? liesD83(erste.bytes, 'cp850') : liesP83(erste.bytes);
+    assert.deepEqual(streng.fehler, [], art);
+    assert.ok(streng.lv[0].positionen[0].langtext.includes('Dämmung'));
+    assert.ok(streng.lv[0].positionen[0].langtext.includes('Straße'));
+    assert.ok(streng.lv[0].positionen[0].langtext.includes('ß'));
+    const xlsx = schreibeXlsx(XLSX, streng.lv);
+    const wieder = leseMappe(XLSX, xlsx, { quelle: 'export' });
+    assert.deepEqual(wieder.fehler, []);
+    assert.match(wieder.lv[0].positionen[0].langtext, /Dämmung an der Straße liefern\.\nFuge/);
+    const zweite = art === 'D83'
+      ? schreibeD83(wieder.lv, kopf, 'cp850', 'null', true, [])
+      : schreibeP83(wieder.lv, kopf, 'null', []);
+    assert.equal(gleich(erste.bytes, zweite.bytes), true, art);
+    const alsLf = Uint8Array.from(Buffer.from(Buffer.from(erste.bytes).toString('latin1').replaceAll('\r\n', '\n'), 'latin1'));
+    const tolerant = art === 'D83'
+      ? liesD83(alsLf, 'cp850', { tolerant: true })
+      : liesP83(alsLf, { tolerant: true });
+    assert.deepEqual(tolerant.fehler, [], `${art} LF`);
+    assert.ok(tolerant.hinweise.some((h) => h.includes('LF')));
+    assert.equal(tolerant.lv[0].positionen.length, 2);
+  }
+  const mitCr = schreibeP83([{
+    oz: '03', titel: 'Ausbau', positionen: [{
+      oz: '03.0010', kurztext: 'Dämmung', langtext: 'Größe\r\nund Straße', menge: '1', einheit: 'm²', bedarf: false,
+    }],
+  }], kopf, 'null', []);
+  nurCrlf(mitCr.bytes);
+  assert.deepEqual(liesP83(mitCr.bytes).fehler, []);
+  assert.match(liesP83(mitCr.bytes).lv[0].positionen[0].langtext, /Größe\nund Straße/);
+});
+
 test('App nennt sich selbst und hat einen eigenen Cache', () => {
   const app = readFileSync(join(root, '../gaeb/js/app.js'), 'utf8');
   assert.match(app, /GAEB-Umwandler/);
   assert.doesNotMatch(app, /xlsx_to_gaeb/);
-  assert.match(readFileSync(join(root, '../gaeb/sw.js'), 'utf8'), /gaeb-v1\.0\.0/);
+  assert.match(readFileSync(join(root, '../gaeb/sw.js'), 'utf8'), /gaeb-v1\.0\.1/);
   assert.equal(readdirSync(join(root, '../gaeb')).includes('index.html'), true);
 });

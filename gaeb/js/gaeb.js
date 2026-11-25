@@ -55,8 +55,8 @@ function wrapChunks(text, width) {
 
 export function umbrechen(text, breite) {
   const zeilen = [];
-  for (const absatz of String(text || '').split('\n')) {
-    const a = excelTrim(absatz);
+  for (const stueck of absatz(text).split('\n')) {
+    const a = excelTrim(stueck);
     if (!a) continue;
     zeilen.push(...wrapChunks(a, breite));
   }
@@ -71,10 +71,18 @@ function canEncode(ch, table) {
   return table.encode[ch.codePointAt(0)] !== undefined;
 }
 
+function absatz(text) {
+  return String(text ?? '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function eineZeile(text) {
+  return absatz(text).replace(/\n/g, ' ');
+}
+
 export function kodierbar(text, codecName, meldungen, wo) {
   const table = codecOf(codecName);
   let aus = '';
-  for (const ch of String(text || '')) {
+  for (const ch of absatz(text)) {
     if (canEncode(ch, table)) aus += ch;
     else {
       const r = ERSATZ[ch] ?? '?';
@@ -180,11 +188,11 @@ export function schreibeD83(lv, kopf, codecName, leereMenge, einheitAscii, hinwe
   const saetze = [];
   saetze.push(new Satz('00').setze(11, 12, '83').setze(13, 13, 'L').setze(63, 71, OZMASKE).setze(72, 73, '90'));
   const s01 = new Satz('01');
-  s01.setze(3, 42, kodierbar(kopf.lvBez || '', codecName, zeichen, 'Satz 01').slice(0, 40));
+  s01.setze(3, 42, eineZeile(kodierbar(kopf.lvBez || '', codecName, zeichen, 'Satz 01')).slice(0, 40));
   s01.setze(43, 50, padDate(kopf.datum).dmy2);
   saetze.push(s01);
-  saetze.push(new Satz('02').setze(3, 62, kodierbar(kopf.projekt || '', codecName, zeichen, 'Satz 02').slice(0, 60)));
-  saetze.push(new Satz('03').setze(3, 62, kodierbar(kopf.auftraggeber || '', codecName, zeichen, 'Satz 03').slice(0, 60)));
+  saetze.push(new Satz('02').setze(3, 62, eineZeile(kodierbar(kopf.projekt || '', codecName, zeichen, 'Satz 02')).slice(0, 60)));
+  saetze.push(new Satz('03').setze(3, 62, eineZeile(kodierbar(kopf.auftraggeber || '', codecName, zeichen, 'Satz 03')).slice(0, 60)));
   saetze.push(new Satz('08').setze(3, 8, 'EUR').setze(9, 58, 'Euro'));
   let anz = 0;
   for (const g of lv) {
@@ -204,7 +212,7 @@ export function schreibeD83(lv, kopf, codecName, leereMenge, einheitAscii, hinwe
       } else if (leereMenge === 'null') s21.setze(24, 34, '0'.repeat(11));
       let e = p.einheit || '';
       if (einheitAscii) e = e.replaceAll('²', '2').replaceAll('³', '3');
-      e = kodierbar(e, codecName, zeichen, `${p.oz} Einheit`);
+      e = eineZeile(kodierbar(e, codecName, zeichen, `${p.oz} Einheit`));
       if (e.length > 4) { p._d83EinheitLeer = e; e = ''; }
       s21.setze(35, 38, e);
       saetze.push(s21);
@@ -229,8 +237,8 @@ function g2k(t) {
 
 function rtf(text) {
   const teile = [];
-  for (const absatz of String(text || '').split('\n')) {
-    const a = excelTrim(absatz);
+  for (const stueck of absatz(text).split('\n')) {
+    const a = excelTrim(stueck);
     let o = '';
     for (const ch of a) {
       if ('\\{}'.includes(ch)) o += '\\' + ch;
@@ -252,7 +260,7 @@ export function schreibeP83(lv, kopf, leereMenge, hinweise = []) {
   const zaehl = { obj: 0, elem: 0 };
   const beg = (n) => { zeilen.push(' '.repeat(stufe) + `#begin[${n}]`); stufe += 1; zaehl.obj += 1; };
   const end = (n) => { stufe -= 1; zeilen.push(' '.repeat(stufe) + `#end[${n}]`); };
-  const el = (n, w) => { zeilen.push(' '.repeat(stufe) + `[${n}]${g2k(w)}[end]`); zaehl.elem += 1; };
+  const el = (n, w) => { zeilen.push(' '.repeat(stufe) + `[${n}]${g2k(eineZeile(w))}[end]`); zaehl.elem += 1; };
   const dt = padDate(kopf.jetzt);
   const datum = padDate(kopf.datum);
   beg('GAEB');
@@ -320,6 +328,24 @@ function zeileAn(prev, inhalt) {
   return prev ? `${prev}\n${t}` : t;
 }
 
+function zeilenendenHinweis(text) {
+  let crlf = 0;
+  let lf = 0;
+  let cr = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === '\r' && text[i + 1] === '\n') { crlf += 1; i += 1; }
+    else if (text[i] === '\n') lf += 1;
+    else if (text[i] === '\r') cr += 1;
+  }
+  if (lf === 0 && cr === 0) return null;
+  const teile = [];
+  if (crlf) teile.push('CRLF');
+  if (lf) teile.push('LF');
+  if (cr) teile.push('CR');
+  if (teile.length === 1) return `Zeilenenden sind ${teile[0]}, nicht durchgehend CRLF. Die Datei wird trotzdem gelesen.`;
+  return `Gemischte Zeilenenden (${teile.join(', ')}). Die Datei wird trotzdem gelesen.`;
+}
+
 function milliAus(roh) {
   const n = BigInt(roh);
   const sign = n < 0n ? '-' : '';
@@ -329,13 +355,16 @@ function milliAus(roh) {
 
 export function liesD83(bytes, codecName, opt = {}) {
   const fehler = [];
+  const hinweise = [];
   const phasen = opt.phasen || ['83'];
   const raw = bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes);
   const text = decodeBytes(raw, codecName);
-  if (!text.includes('\r\n') || text.replaceAll('\r\n', '').includes('\n') || text.replaceAll('\r\n', '').includes('\r')) {
-    fehler.push('Zeilenenden nicht durchgehend CRLF');
+  const enden = zeilenendenHinweis(text);
+  if (enden) {
+    if (opt.tolerant) hinweise.push(enden);
+    else fehler.push('Zeilenenden nicht durchgehend CRLF');
   }
-  const zeilen = text.split('\r\n');
+  const zeilen = (opt.tolerant ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n') : text).split(opt.tolerant ? '\n' : '\r\n');
   if (zeilen[zeilen.length - 1] === '') zeilen.pop();
   const lv = [];
   let akt = null, pos = null, anz99 = null, maske = null, phase = null;
@@ -380,7 +409,7 @@ export function liesD83(bytes, codecName, opt = {}) {
   const n = lv.reduce((s, g) => s + g.positionen.length, 0);
   if (anz99 !== n) fehler.push(`Satz 99: ANZTEIL ${anz99} ≠ ${n} Positionen`);
   if (zeilen.length && zeilen[zeilen.length - 1].slice(0, 2) !== '99') fehler.push('letzter Satz ist nicht 99');
-  return { lv, fehler, phase };
+  return { lv, fehler, hinweise, phase };
 }
 
 function rtfText(r) {
@@ -395,10 +424,14 @@ function rtfText(r) {
 
 export function liesP83(bytes, opt = {}) {
   const fehler = [];
+  const hinweise = [];
   const phasen = opt.phasen || ['83'];
   const text = decodeBytes(bytes instanceof Uint8Array ? bytes : Uint8Array.from(bytes), 'cp1252');
-  const roh = text.replaceAll('\r\n', '');
-  if (roh.includes('\n') || roh.includes('\r')) fehler.push('Zeilenenden nicht durchgehend CRLF');
+  const enden = zeilenendenHinweis(text);
+  if (enden) {
+    if (opt.tolerant) hinweise.push(enden);
+    else fehler.push('Zeilenenden nicht durchgehend CRLF');
+  }
   const endz = text.match(/#end\[GAEB\](\d+)\|(\d+)\s*$/);
   if (!endz) fehler.push('Zählung hinter #end[GAEB] fehlt');
   const muster = () => /#begin\[(\w+)\]|#end\[(\w+)\]|\[(\w+)\]([\s\S]*?)\[end\]/g;
@@ -442,7 +475,7 @@ export function liesP83(bytes, opt = {}) {
   if (endz && (Number(endz[1]) !== nobj || Number(endz[2]) !== nel)) fehler.push(`Zählung ${endz[1]}|${endz[2]} ≠ ${nobj}|${nel}`);
   const dp = kopf['Vergabe/DP'];
   if (!phasen.includes(dp)) fehler.push(phasen.length === 1 && phasen[0] === '83' ? 'DP ist nicht 83' : `DP ${dp || 'leer'} nicht in ${phasen.join('/')}`);
-  return { lv, fehler, kopf, phase: dp };
+  return { lv, fehler, hinweise, kopf, phase: dp };
 }
 
 export function zeichensatzFuer(bytes) {
