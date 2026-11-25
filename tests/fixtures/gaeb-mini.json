@@ -1,0 +1,39 @@
+{
+  "lvBez": "Probe-LV",
+  "projekt": "Hofstrasse 2",
+  "auftraggeber": "Amt Musterstadt",
+  "gruppen": [
+    {
+      "oz": "01",
+      "titel": "Zimmerarbeiten",
+      "positionen": [
+        {
+          "oz": "01.0010",
+          "kurztext": "Dielung aus Nadelholz liefern und verlegen",
+          "langtext": "Dielung aus Nadelholz liefern und verlegen.\nStöße versetzen, Oberfläche schleifen.",
+          "menge": "12.5",
+          "einheit": "m²",
+          "ep": "40",
+          "gp": "500",
+          "bedarf": false
+        },
+        {
+          "oz": "01.0020",
+          "kurztext": "Zulage für eine Aussparung",
+          "langtext": "Einheitspreis ohne Gesamtbetrag (nur EP).\nZulage für eine Aussparung bis 0,5 m².",
+          "menge": null,
+          "einheit": "St",
+          "bedarf": true
+        },
+        {
+          "oz": "01.0030",
+          "kurztext": "Sockelleiste aus Eiche liefern, anbringen und die Stöße auf Gehrung schneiden",
+          "langtext": "Sockelleiste aus Eiche liefern, anbringen und die Stöße auf Gehrung schneiden sowie befestigen.",
+          "menge": null,
+          "einheit": "m",
+          "bedarf": false
+        }
+      ]
+    }
+  ]
+}

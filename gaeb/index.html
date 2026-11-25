@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0f6e56">
+  <title>GAEB-Umwandler</title>
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <p class="mark">Lokal im Browser</p>
+      <h1>GAEB-Umwandler</h1>
+    </div>
+    <p class="lead">Excel nach GAEB 90 (.D83) und GAEB 2000 (.P83), und zurück. Die Datei bleibt auf diesem Gerät, es gibt keinen Upload.</p>
+  </header>
+  <main>
+    <div class="tiles" role="tablist">
+      <button type="button" class="tile on" id="tab-excel" role="tab" aria-selected="true" aria-controls="panel-excel">Excel → GAEB</button>
+      <button type="button" class="tile" id="tab-gaeb" role="tab" aria-selected="false" aria-controls="panel-gaeb">GAEB → Excel</button>
+    </div>
+
+    <section id="panel-excel" role="tabpanel">
+      <form id="excel-form">
+        <label class="drop" id="excel-drop">
+          <input id="excel-file" type="file" accept=".xlsx,.xlsm,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+          <span class="drop-title">Excel-Mappe hierher ziehen oder auswählen</span>
+          <span class="drop-name" id="excel-name">Noch keine Datei</span>
+        </label>
+        <fieldset>
+          <legend>Quelle</legend>
+          <label><input type="radio" name="quelle" value="export" checked> Blatt GAEB-Export</label>
+          <label><input type="radio" name="quelle" value="alle"> Alle Positionen aus der Kalkulation</label>
+        </fieldset>
+        <fieldset>
+          <legend>Kopf der GAEB-Datei</legend>
+          <label>LV-Bezeichnung <input id="lv-bez" name="lv" autocomplete="off" placeholder="leer = Bauvorhaben aus der Mappe"></label>
+          <label>Projekt <input id="projekt" name="projekt" autocomplete="off" placeholder="leer = Bauvorhaben aus der Mappe"></label>
+          <label>Auftraggeber <input id="ag" name="ag" autocomplete="off" placeholder="leer = Kunde aus der Mappe"></label>
+          <p class="hint" id="map-hint"></p>
+        </fieldset>
+        <fieldset>
+          <legend>Mengen und Einheiten</legend>
+          <label><input type="radio" name="leere" value="null" checked> Leere Menge als 0,000 schreiben</label>
+          <label><input type="radio" name="leere" value="leer"> Leere Menge leer lassen</label>
+          <label><input type="checkbox" id="ascii" checked> In der D83 m²/m³ als m2/m3 schreiben</label>
+          <label><input type="checkbox" id="ansi"> Zusätzlich eine D83 in Windows-1252 (ANSI)</label>
+        </fieldset>
+        <button type="submit" class="go" id="excel-go">Prüfen und erzeugen</button>
+      </form>
+    </section>
+
+    <section id="panel-gaeb" role="tabpanel" hidden>
+      <form id="gaeb-form">
+        <label class="drop" id="gaeb-drop">
+          <input id="gaeb-file" type="file" accept=".d81,.d83,.d84,.p81,.p83,.p84,.D81,.D83,.D84,.P81,.P83,.P84">
+          <span class="drop-title">D83, P83 oder Phase 81/84 hierher ziehen</span>
+          <span class="drop-name" id="gaeb-name">Noch keine Datei</span>
+        </label>
+        <p class="hint">Zeichensatz 850 oder 1252 wird erkannt. Phase 81 und 84 werden mit dem Satzbild der Phase 83 gelesen.</p>
+        <button type="submit" class="go">Nach Excel</button>
+      </form>
+    </section>
+
+    <section id="preview" class="preview" hidden aria-live="polite"></section>
+  </main>
+  <footer>
+    <p>Ziel sind GAEB 90 und GAEB 2000. Die D83 ist Codepage 850, die P83 Windows-1252 und nennt als Programm „GAEB-Umwandler“. Angaben in den Feldern bleiben in diesem Browser gespeichert.</p>
+  </footer>
+  <script src="./vendor/xlsx.full.min.js"></script>
+  <script type="module" src="./js/app.js"></script>
+</body>
+</html>
