@@ -131,15 +131,22 @@ export function canShareFile(file) {
  * Rückgabe: 'shared' | 'download' | 'abort' (Nutzer hat das Menü geschlossen).
  */
 export async function shareOrDownload(blob, name, title) {
-  const file = fileForShare(blob, name);
-  if (canShareFile(file)) {
+  return shareOrDownloadMany([{ blob, name }], title);
+}
+
+/** Mehrere Dateien über das Systemmenü teilen (Mail, WhatsApp), sonst jede einzeln herunterladen. */
+export async function shareOrDownloadMany(items, title) {
+  const files = items.map((it) => fileForShare(it.blob, it.name));
+  if (files.length && typeof navigator.share === 'function' && typeof navigator.canShare === 'function') {
     try {
-      await navigator.share({ files: [file], title: title || name });
-      return 'shared';
+      if (navigator.canShare({ files })) {
+        await navigator.share({ files, title: title || files[0].name });
+        return 'shared';
+      }
     } catch (e) {
       if (e && e.name === 'AbortError') return 'abort';
     }
   }
-  downloadBlob(blob, name);
+  for (const it of items) downloadBlob(it.blob, it.name);
   return 'download';
 }

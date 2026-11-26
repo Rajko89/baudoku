@@ -1,6 +1,6 @@
 // Baudoku – Hauptanwendung (Views, Router)
 import * as db from './db.js';
-import { $, $$, esc, uid, fmtDate, fmtDateTime, fmtNum, fmtCoord, fmtBytes, isoDate, parseNum, toast, modal, confirmDlg, loadImg, canvasToBlob, downloadBlob, shareOrDownload, safeName, HEADER_COLORS } from './util.js';
+import { $, $$, esc, uid, fmtDate, fmtDateTime, fmtNum, fmtCoord, fmtBytes, isoDate, parseNum, toast, modal, confirmDlg, loadImg, canvasToBlob, downloadBlob, shareOrDownload, shareOrDownloadMany, safeName, HEADER_COLORS } from './util.js';
 import { startGeo, stopGeo, getFix, onGeo, geoState, reverseGeocode, processImage, liveCamera } from './media.js';
 import { readExif } from './exif.js';
 import { emptyMeasure, measureValue } from './geom.js';
@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.7.10';
+const APP_VERSION = 'baudoku-v1.7.11';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -51,6 +51,7 @@ async function route() {
 }
 window.addEventListener('hashchange', route);
 const header = (title, { back, sub, right = '' } = {}) => `<header class="hdr">${back ? `<button class="ib" data-nav="${esc(back)}" aria-label="Zurück">←</button>` : '<span style="width:8px"></span>'}<h1>${esc(title)}${sub ? `<span class="sub">${esc(sub)}</span>` : ''}</h1>${right}</header>`;
+let fotoAuswahl = false;
 APP.addEventListener('click', e => {
   const del = e.target.closest('[data-del-project]');
   if (del) { e.preventDefault(); e.stopPropagation(); deleteProjectFlow(del.dataset.delProject); return; }
@@ -243,8 +244,16 @@ async function viewProject(pid, tab, q) {
 
   if (tab === 'photos') {
     startGeo(); cleanup.push(stopGeo);
+    fotoAuswahl = false;
+    const gewaehlt = new Set();
+    const fotoName = (ph, nr) => `${safeName(p.name)}_${isoDate(ph.time || ph.created || Date.now())}_${nr}.jpg`;
     T.innerHTML = `<div class="gps"><span class="dot" id="gdot"></span><span id="gtxt">GPS wird gesucht …</span></div>
-      <div class="pgrid">${photos.map((x, i) => `<div class="shot"><div class="ph" data-nav="#/photo/${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span>${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}<div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div><button type="button" class="btn block draw-label" data-draw="${x.id}">✎ Zeichnen</button></div>`).join('')}</div>
+      ${photos.length ? `<button type="button" class="btn block" id="bSel">Auswählen</button>
+      <div class="row pick-bar" id="pickBar" hidden>
+        <button type="button" class="btn primary" id="bShare" disabled>Teilen</button>
+        <button type="button" class="btn" id="bDlMany" disabled>Herunterladen</button>
+      </div>` : ''}
+      <div class="pgrid">${photos.map((x, i) => `<div class="shot"><div class="ph" data-nav="#/photo/${x.id}" data-pick="${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span><span class="pickmark" hidden></span>${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}<div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div><button type="button" class="btn block draw-label" data-draw="${x.id}">✎ Zeichnen</button></div>`).join('')}</div>
       ${photos.length ? '' : '<div class="empty">Noch keine Fotos.<br>Foto aufnehmen oder aus der Galerie wählen.</div>'}
       <div class="actions-sticky"><button class="btn primary block" id="bCam" style="min-height:64px;font-size:1.1rem">📷 Foto aufnehmen</button>
       <div class="grid2" style="margin-top:8px"><button class="btn" id="bLive">🎥 Live-Kamera (Serie)</button><button class="btn" id="bGal">🖼 Aus Galerie</button></div></div>`;
@@ -255,6 +264,50 @@ async function viewProject(pid, tab, q) {
     const inCam = $('#in-camera'), inGal = $('#in-gallery');
     inCam.onchange = async () => { const fs = [...inCam.files]; inCam.value = ''; await addFiles(pid, fs, 'camera'); reload(); };
     inGal.onchange = async () => { const fs = [...inGal.files]; inGal.value = ''; await addFiles(pid, fs, 'gallery'); reload(); };
+    const markierung = () => {
+      $$('.ph[data-pick]').forEach((el) => {
+        const an = gewaehlt.has(el.dataset.pick);
+        el.classList.toggle('picked', an);
+        const m = el.querySelector('.pickmark');
+        if (m) { m.hidden = !fotoAuswahl; m.textContent = an ? '✓' : ''; }
+      });
+      const bar = $('#pickBar');
+      if (bar) bar.hidden = !fotoAuswahl;
+      const n = gewaehlt.size;
+      const share = $('#bShare');
+      const dl = $('#bDlMany');
+      if (share) { share.disabled = !n; share.textContent = n ? `Teilen (${n})` : 'Teilen'; }
+      if (dl) dl.disabled = !n;
+      const sel = $('#bSel');
+      if (sel) sel.textContent = fotoAuswahl ? 'Fertig' : 'Auswählen';
+    };
+    const dateien = () => [...gewaehlt].map((id) => {
+      const ph = photos.find((x) => x.id === id);
+      return ph ? { blob: ph.stamped || ph.original, name: fotoName(ph, no.get(id)) } : null;
+    }).filter(Boolean);
+    if ($('#bSel')) $('#bSel').onclick = () => { fotoAuswahl = !fotoAuswahl; if (!fotoAuswahl) gewaehlt.clear(); markierung(); };
+    T.addEventListener('click', (e) => {
+      if (!fotoAuswahl || e.target.closest('[data-draw]')) return;
+      const ph = e.target.closest('.ph[data-pick]');
+      if (!ph) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const id = ph.dataset.pick;
+      if (gewaehlt.has(id)) gewaehlt.delete(id); else gewaehlt.add(id);
+      markierung();
+    }, true);
+    if ($('#bShare')) $('#bShare').onclick = async () => {
+      const items = dateien();
+      if (!items.length) return;
+      const r = await shareOrDownloadMany(items, p.name);
+      if (r === 'shared') toast(items.length > 1 ? `${items.length} Fotos geteilt` : 'Foto geteilt');
+      else if (r === 'download') toast('Download gestartet');
+    };
+    if ($('#bDlMany')) $('#bDlMany').onclick = () => {
+      const items = dateien();
+      for (const it of items) downloadBlob(it.blob, it.name);
+      if (items.length) toast('Download gestartet');
+    };
     $('#bCam').onclick = () => { startGeo(); inCam.click(); };
     $('#bGal').onclick = () => inGal.click();
     $('#bLive').onclick = async () => { startGeo(); let chain = Promise.resolve(); const ok = await liveCamera(b => { chain = chain.then(() => addPhoto(pid, b, 'live')).catch(console.error); }); await chain; if (ok) reload(); };
@@ -421,6 +474,7 @@ async function viewPhoto(id) {
   const items = ph.measure?.items || [];
   APP.innerHTML = header(`Foto ${i + 1} / ${all.length}`, { back: `#/p/${ph.projectId}?tab=photos`, sub: p?.name, right: `<button class="ib" ${prev ? `data-nav="#/photo/${prev.id}"` : 'disabled'} aria-label="Vorheriges">‹</button><button class="ib" ${next ? `data-nav="#/photo/${next.id}"` : 'disabled'} aria-label="Nächstes">›</button>` }) +
     `<main><img class="photo-full" id="pimg" src="${url(ph.stamped)}" alt="Foto">
+    <div class="grid2" style="margin-top:8px"><button class="btn primary" id="sharePh">Teilen</button><button class="btn" id="dl">Herunterladen</button></div>
     <button class="btn primary block" id="drawOpen" style="margin-top:8px">✎ Zeichnen${ph.markup?.strokes?.length ? ` (${ph.markup.strokes.length})` : ''}</button>
     <div class="row" style="margin:8px 0"><button class="btn sm" data-v="stamped">Mit Stempel</button><button class="btn sm" data-v="original">Original</button></div>
     <label class="f">Bildbeschreibung<textarea class="inp" id="cap" style="min-height:70px" placeholder="z. B. Kehle Nordseite, Ziegel gebrochen">${esc(ph.caption)}</textarea></label>
@@ -431,7 +485,7 @@ async function viewPhoto(id) {
     ${items.length ? `<div class="card"><b>Messungen</b><div class="mlist">${items.map(it => `<div class="mi"><span class="n">${esc(it.name)}</span><span class="v">${fmtVal(measureValue(ph.measure, it))}</span></div>`).join('')}</div></div>` : ''}
     ${notes.length ? `<div class="card"><b>Notizen zum Foto</b>${notes.map(n => `<div class="note small" style="margin-top:8px"><b>${fmtDateTime(n.created)}</b><br>${esc(n.text)}</div>`).join('')}</div>` : ''}
     <div class="grid2"><button class="btn" id="reSt">🔄 Stempel neu</button><button class="btn" id="reLoc">📍 Standort jetzt</button>
-    <button class="btn" id="dl">⬇ Speichern</button><button class="btn" id="cover">⭐ Titelbild</button></div>
+    <button class="btn" id="cover">⭐ Titelbild</button></div>
     <button class="btn danger block" id="delPh" style="margin-top:8px">🗑 Foto löschen</button></main>`;
   let capT; $('#cap').addEventListener('input', e => { clearTimeout(capT); capT = setTimeout(async () => { ph.caption = e.target.value; await db.put('photos', ph); }, 400); });
   let deleted = false;
@@ -440,7 +494,14 @@ async function viewPhoto(id) {
   $('#drawOpen').onclick = () => go(`#/draw/${id}`);
   $('#reSt').onclick = async () => { toast('Stempel wird erzeugt …'); ph.caption = $('#cap').value; await restamp(ph); toast('Stempel aktualisiert'); route(); };
   $('#reLoc').onclick = async () => { if (!await confirmDlg('Standort ersetzen?', 'Aktuellen GPS-Standort für dieses Foto übernehmen und Stempel neu erzeugen?', 'Übernehmen', 'primary')) return; toast('Standort wird ermittelt …'); const f = await getFix(15000); if (!f) return toast('Kein GPS verfügbar'); Object.assign(ph, { lat: f.lat, lon: f.lon, acc: f.acc, address: '' }); ph.caption = $('#cap').value; await restamp(ph); toast('Standort aktualisiert'); route(); };
-  $('#dl').onclick = () => downloadBlob(ph.stamped, `${safeName(p?.name)}_Foto${i + 1}.jpg`);
+  const dateiname = `${safeName(p?.name)}_${isoDate(ph.time || ph.created || Date.now())}_${i + 1}.jpg`;
+  const bild = ph.stamped || ph.original;
+  $('#sharePh').onclick = async () => {
+    const r = await shareOrDownload(bild, dateiname, p?.name || 'Foto');
+    if (r === 'shared') toast('Foto geteilt');
+    else if (r === 'download') toast('Download gestartet');
+  };
+  $('#dl').onclick = () => { downloadBlob(bild, dateiname); toast('Download gestartet'); };
   $('#cover').onclick = async () => { p.coverPhotoId = id; await db.put('projects', p); toast('Als Titelbild gesetzt'); };
   $('#delPh').onclick = async () => { if (!await confirmDlg('Foto löschen?', 'Foto inkl. Messungen wird gelöscht. Verknüpfte Aufmaß-Positionen bleiben als manuelle Werte erhalten.')) return; deleted = true; await db.del('photos', id); for (const n of notes) { n.photoId = null; await db.put('notes', n); } for (const r of (await db.byProject('aufmass', ph.projectId)).filter(r => r.photoId === id)) { r.photoId = null; await db.put('aufmass', r); } toast('Foto gelöscht'); go(`#/p/${ph.projectId}?tab=photos`); };
 }

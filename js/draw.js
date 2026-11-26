@@ -1,6 +1,7 @@
 // Ein Editor für Foto, leeres Blatt und vorhandene Flächenskizzen.
 import * as db from './db.js';
-import { parseNum } from './util.js';
+import { parseNum, canvasToBlob, uid } from './util.js';
+import { emptyMeasure } from './geom.js';
 import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
@@ -791,11 +792,40 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     return null;
   }
+  function hatZeichnung(d) {
+    return !!((d.edges || []).length || (d.strokes || []).length || (d.texts || []).length || (d.shapes || []).length);
+  }
   async function persist() {
     const strokes = legacyStrokes(doc);
     if (photo) { photo.markup = { ...(photo.markup || {}), doc, hidePhoto, strokes }; await db.put('photos', photo); }
     if (sheet) { sheet.doc = doc; sheet.strokes = strokes; sheet.updated = Date.now(); await db.put('sheets', sheet); }
     if (sketch) { sketch.doc = doc; sketch.updated = Date.now(); await db.put('sketches', sketch); }
+  }
+  async function veroeffentlicheFoto() {
+    if (!photo || !hatZeichnung(doc)) return null;
+    const canvas = renderDoc(img, doc, { hidePhoto, max: 2000 });
+    const bild = await canvasToBlob(canvas, 'image/jpeg', 0.9);
+    const klein = renderDoc(img, doc, { hidePhoto, max: 480 });
+    const thumb = await canvasToBlob(klein, 'image/jpeg', 0.75);
+    const titel = photo.caption ? `Zeichnung: ${photo.caption}` : 'Zeichnung';
+    let kopie = photo.markup?.exportId ? await db.get('photos', photo.markup.exportId) : null;
+    if (!kopie || kopie.projectId !== photo.projectId) {
+      kopie = {
+        id: uid(), projectId: photo.projectId, created: Date.now(), time: Date.now(), timeKind: 'capture',
+        lat: photo.lat ?? null, lon: photo.lon ?? null, acc: photo.acc ?? null, address: photo.address || '',
+        source: 'drawing', sourcePhotoId: photo.id, caption: titel,
+        original: bild, stamped: bild, thumb, width: canvas.width, height: canvas.height, measure: emptyMeasure(),
+      };
+    } else {
+      Object.assign(kopie, {
+        time: Date.now(), caption: titel, original: bild, stamped: bild, thumb,
+        width: canvas.width, height: canvas.height, source: 'drawing', sourcePhotoId: photo.id,
+      });
+    }
+    await db.put('photos', kopie);
+    photo.markup = { ...(photo.markup || {}), doc, hidePhoto, strokes: legacyStrokes(doc), exportId: kopie.id };
+    await db.put('photos', photo);
+    return kopie;
   }
   async function commit(next) {
     undo.push(clone(doc));
@@ -1299,7 +1329,14 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-fold').onclick = () => setToolsOpen(false);
   el.querySelector('#draw-unfold').onclick = () => setToolsOpen(true);
   el.querySelector('#draw-home').onclick = () => onBack();
-  el.querySelector('#draw-save').onclick = async () => { await persist(); msg = 'Gespeichert'; paint(); };
+  el.querySelector('#draw-save').onclick = async () => {
+    await persist();
+    if (photo) {
+      const kopie = await veroeffentlicheFoto();
+      msg = kopie ? 'Als eigenes Foto gespeichert' : 'Gespeichert';
+    } else msg = 'Gespeichert';
+    paint();
+  };
   applyDock();
   async function refreshArea() {
     ann = [];

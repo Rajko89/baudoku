@@ -21,6 +21,10 @@ function relLum(rgb) {
 }
 function contrastWhite(rgb) { return 1.05 / (relLum(rgb) + 0.05); }
 
+function markupFuer(p, photos) {
+  if (p?.markup?.exportId && (photos || []).some((o) => o.id === p.markup.exportId)) return null;
+  return p?.markup;
+}
 async function jpeg(blob, max = 1600, q = 0.82, markup) {
   const img = await loadImg(blob);
   try {
@@ -69,7 +73,7 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
   if (project.notiz) { y += 4; txt('Projektnotiz', 11, 'bold', GREY); txt(project.notiz, 10.5); }
   const cover = photos.find(p => p.id === project.coverPhotoId) || photos[0];
   if (cover && opts.includePhotos) {
-    const j = await jpeg(cover.stamped || cover.original, 1400, 0.82, cover.markup);
+    const j = await jpeg(cover.stamped || cover.original, 1400, 0.82, markupFuer(cover, photos));
     const maxH = PH - 25 - y - 6; if (maxH > 50) { let w = CW, h = w * j.h / j.w; if (h > maxH) { h = maxH; w = h * j.w / j.h; } doc.addImage(j.data, 'JPEG', M + (CW - w) / 2, y + 6, w, h); }
   }
 
@@ -84,7 +88,7 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
       doc.setFontSize(10.5); const capL = p.caption ? doc.splitTextToSize(p.caption, CW) : [];
       const textH = metaL.length * 3.9 + capL.length * 4.6 + 3;
       if (y + slotH > PH - 16) { newPage(); }
-      const j = await jpeg(opts.stamped ? (p.stamped || p.original) : p.original, 1600, 0.82, p.markup);
+      const j = await jpeg(opts.stamped ? (p.stamped || p.original) : p.original, 1600, 0.82, markupFuer(p, photos));
       const imgMaxH = slotH - textH; let w = CW, h = w * j.h / j.w; if (h > imgMaxH) { h = imgMaxH; w = h * j.w / j.h; }
       doc.addImage(j.data, 'JPEG', M + (CW - w) / 2, y, w, h); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.rect(M + (CW - w) / 2, y, w, h);
       let ty = y + h + 4.5;
