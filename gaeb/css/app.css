@@ -33,7 +33,7 @@ body {
 h1 { margin: 0 0 8px; font-size: 34px; line-height: 1.1; }
 .lead, .hint, footer p { color: var(--muted); }
 .lead { margin: 0; max-width: 62ch; }
-.tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 22px 0; }
+.tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 22px 0; }
 .tile, .go, .downloads button, .downloads a {
   font: inherit;
   border-radius: 14px;
@@ -113,6 +113,20 @@ th { font-size: 13px; color: var(--muted); }
 td.num, th.num { text-align: right; white-space: nowrap; }
 .clip { max-width: 280px; }
 footer { padding: 18px 0 32px; }
+.viewer-tools { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 8px 0 12px; }
+.viewer-tools .go { width: auto; margin-top: 0; }
+.viewer-tools input[type="search"] { flex: 1 1 180px; font: inherit; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--line); }
+.baum { display: flex; flex-direction: column; gap: 8px; }
+.titel { border: 1px solid var(--line); border-radius: 12px; background: #fff; padding: 0 10px 8px; }
+.titel > summary { cursor: pointer; font-weight: 700; padding: 10px 4px; min-height: 44px; }
+.pos { border-top: 1px solid var(--line); padding: 8px 0; }
+.pos-kopf { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.oz { font-weight: 700; }
+.art { color: var(--green-dark); font-size: 14px; }
+.zahlen { display: flex; flex-wrap: wrap; gap: 12px; margin: 4px 0 0; }
+.lang { margin-top: 4px; }
+.lang summary { cursor: pointer; color: var(--green); min-height: 36px; }
+.lang p { white-space: pre-wrap; margin: 4px 0 0; }
 @media (max-width: 860px) {
   .tiles { grid-template-columns: 1fr; }
   h1 { font-size: 28px; }

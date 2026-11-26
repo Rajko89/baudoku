@@ -367,6 +367,7 @@ export function liesD83(bytes, codecName, opt = {}) {
   const zeilen = (opt.tolerant ? text.replace(/\r\n/g, '\n').replace(/\r/g, '\n') : text).split(opt.tolerant ? '\n' : '\r\n');
   if (zeilen[zeilen.length - 1] === '') zeilen.pop();
   const lv = [];
+  const kopf = {};
   let akt = null, pos = null, anz99 = null, maske = null, phase = null;
   zeilen.forEach((z, idx) => {
     const i = idx + 1;
@@ -378,7 +379,11 @@ export function liesD83(bytes, codecName, opt = {}) {
       maske = z.slice(62, 71);
       if (i === 1 && (z[12] !== 'L' || z.slice(71, 73) !== '90' || !phasen.includes(phase))) fehler.push('Satz 00 fehlerhaft');
     } else if (i === 1) fehler.push('Satz 00 fehlerhaft');
-    if (za === '11') { akt = { oz: z.slice(2, 11).trimEnd(), titel: '', positionen: [] }; lv.push(akt); }
+    if (za === '11') { akt = { oz: z.slice(2, 11).trimEnd(), titel: '', positionen: [], ebene: 1 }; lv.push(akt); }
+    else if (za === '01') { kopf.lvBez = z.slice(2, 42).trim(); kopf.datum = z.slice(42, 50).trim(); }
+    else if (za === '02') kopf.projekt = z.slice(2, 62).trim();
+    else if (za === '03') kopf.auftraggeber = z.slice(2, 62).trim();
+    else if (za === '08') { kopf.waehrung = z.slice(2, 8).trim(); kopf.waeBez = z.slice(8, 58).trim(); }
     else if (za === '12') akt.titel = zeileAn(akt.titel, z.slice(2, 42));
     else if (za === '21') {
       const m = z.slice(23, 34);
@@ -391,7 +396,11 @@ export function liesD83(bytes, codecName, opt = {}) {
       const art = z.slice(11, 14);
       if (art !== 'NNN' && art !== 'NEN') fehler.push(`Satz ${i}: Positionsart ${art}`);
       const o = z.slice(2, 11);
-      pos = { oz: o.slice(0, 2) + '.' + o.slice(2, 6), menge, einheit: z.slice(34, 38).trimEnd(), bedarf: art[1] === 'E', kurztext: '', langtext: '' };
+      pos = {
+        oz: o.slice(0, 2) + '.' + o.slice(2, 6), menge, einheit: z.slice(34, 38).trimEnd(),
+        bedarf: art[1] === 'E', artCode: art, positionsart: artBezeichnung(art),
+        ep: null, gp: null, kurztext: '', langtext: '',
+      };
       if (z.slice(38, 74).trim() || o.slice(6, 9).trim()) fehler.push(`Satz ${i}: unerwartete Zeichen`);
       if (!akt || o.slice(0, 2) !== akt.oz) fehler.push(`Satz ${i}: OZ nicht in Gruppe`);
       if (akt) akt.positionen.push(pos);
@@ -409,7 +418,38 @@ export function liesD83(bytes, codecName, opt = {}) {
   const n = lv.reduce((s, g) => s + g.positionen.length, 0);
   if (anz99 !== n) fehler.push(`Satz 99: ANZTEIL ${anz99} ≠ ${n} Positionen`);
   if (zeilen.length && zeilen[zeilen.length - 1].slice(0, 2) !== '99') fehler.push('letzter Satz ist nicht 99');
-  return { lv, fehler, hinweise, phase };
+  kopf.phase = phase || '';
+  return { lv, fehler, hinweise, phase, kopf };
+}
+
+export function artBezeichnung(code) {
+  const raw = String(code || '').trim();
+  const c = raw.toUpperCase();
+  if (!c) return 'Normal';
+  if (/BEDARF|EVENTUAL/.test(c)) return 'Bedarf';
+  if (/ZULAGE|ZUSCHLAG/.test(c)) return 'Zulage';
+  if (/WAHL|ALTERNATIV/.test(c)) return 'Wahl';
+  if (/^GRUND/.test(c)) return 'Grund';
+  if (/NORMAL/.test(c)) return 'Normal';
+  if (/^[A-Z]{2,4}$/.test(c)) {
+    const teile = [];
+    if (c[1] === 'E' || c[1] === 'M') teile.push('Bedarf');
+    if (c[0] === 'A' || c[0] === 'W') teile.push('Wahl');
+    else if (c[0] === 'G') teile.push('Grund');
+    else if (c[0] === 'S') teile.push('Stundenlohn');
+    else if (c[0] === 'Z' || c[1] === 'Z') teile.push('Zulage');
+    if (!teile.length) teile.push('Normal');
+    return [...new Set(teile)].join(', ');
+  }
+  return raw;
+}
+
+export function preisZahl(wert) {
+  let t = String(wert ?? '').trim().replace(/\s/g, '');
+  if (!t) return null;
+  if (t.includes(',')) t = t.replace(/\./g, '').replace(',', '.');
+  if (!/^-?\d+(\.\d+)?$/.test(t)) return null;
+  return t;
 }
 
 function rtfText(r) {
@@ -445,9 +485,11 @@ export function liesP83(bytes, opt = {}) {
     const [, b, e, k, w0] = mt;
     if (b) {
       stapel.push(b); nobj += 1;
-      if (b === 'LVBereich') { akt = { oz: null, titel: '', positionen: [] }; lv.push(akt); }
-      else if (b === 'Position') {
-        pos = { oz: null, menge: null, einheit: '', bedarf: false, kurztext: '', langtext: '' };
+      if (b === 'LVBereich') {
+        akt = { oz: null, titel: '', positionen: [], ebene: stapel.filter((s) => s === 'LVBereich').length };
+        lv.push(akt);
+      } else if (b === 'Position') {
+        pos = { oz: null, menge: null, einheit: '', bedarf: false, positionsart: 'Normal', ep: null, gp: null, kurztext: '', langtext: '' };
         akt.positionen.push(pos);
       }
     } else if (e) {
@@ -456,15 +498,20 @@ export function liesP83(bytes, opt = {}) {
       nel += 1;
       const w = w0.replaceAll('&#91;', '[').replaceAll('&#93;', ']').replaceAll('&#38;', '&');
       const ober = stapel[stapel.length - 1] || '';
+      const preisFeld = { EP: 'ep', Einheitspreis: 'ep', GB: 'gp', GP: 'gp', Gesamtbetrag: 'gp' }[k];
+      const inPosition = pos && stapel.includes('Position');
       if (ober === 'LVBereich') {
         if (k === 'OZ') akt.oz = w;
         else if (k === 'Bez') akt.titel = w;
-      } else if (ober === 'Position') {
-        if (k === 'OZ') pos.oz = w.slice(0, 2) + '.' + w.slice(2);
-        else if (k === 'Menge') {
-          if (!/^-?\d+,\d{3}$/.test(w)) fehler.push(`Menge ${w} nicht im Format 0,000`);
-          pos.menge = w.replace(',', '.');
-        } else if (k === 'ME') pos.einheit = w;
+      } else if (ober === 'Position' && k === 'OZ') pos.oz = w.slice(0, 2) + '.' + w.slice(2);
+      else if (ober === 'Position' && k === 'Menge') {
+        if (!/^-?\d+,\d{3}$/.test(w)) fehler.push(`Menge ${w} nicht im Format 0,000`);
+        pos.menge = w.replace(',', '.');
+      } else if (ober === 'Position' && k === 'ME') pos.einheit = w;
+      else if (inPosition && preisFeld) pos[preisFeld] = preisZahl(w);
+      else if (inPosition && ober !== 'Beschreibung' && ['Art', 'PosArt', 'Positionsart'].includes(k)) {
+        pos.positionsart = artBezeichnung(w);
+        if (pos.positionsart === 'Bedarf') pos.bedarf = true;
       } else if (ober === 'Beschreibung') {
         if (k === 'Kurztext') pos.kurztext = w;
         else if (k === 'Langtext') pos.langtext = rtfText(w);
@@ -491,6 +538,44 @@ export function zeichensatzFuer(bytes) {
   const oem = punkte('cp850');
   const ansi = punkte('cp1252');
   return { art: 'D', codec: ansi > oem ? 'cp1252' : 'cp850' };
+}
+
+export function leseGaeb(bytes) {
+  const erkannt = zeichensatzFuer(bytes);
+  const opt = { phasen: ['81', '82', '83', '84', '85', '86'], tolerant: true };
+  const gelesen = erkannt.art === 'P' ? liesP83(bytes, opt) : liesD83(bytes, erkannt.codec, opt);
+  const k = gelesen.kopf || {};
+  const kopf = erkannt.art === 'D' ? {
+    lvBez: k.lvBez || '', projekt: k.projekt || '', auftraggeber: k.auftraggeber || '',
+    datum: k.datum || '', uhrzeit: '', waehrung: k.waehrung || '', waeBez: k.waeBez || '',
+    phase: gelesen.phase || '',
+  } : {
+    lvBez: k['LVInfo/Bez'] || k['LVInfo/Name'] || '',
+    projekt: k['PrjInfo/Bez'] || '',
+    auftraggeber: k['Adresse/Name1'] || '',
+    datum: k['LVInfo/Datum'] || k['GAEBInfo/Datum'] || '',
+    uhrzeit: k['GAEBInfo/Uhrzeit'] || '',
+    waehrung: k['VergabeInfo/Wae'] || '',
+    waeBez: k['VergabeInfo/WaeBez'] || '',
+    phase: gelesen.phase || '',
+  };
+  return { ...gelesen, art: erkannt.art, codec: erkannt.codec, kopf };
+}
+
+export function positionsHinweise(lv) {
+  const gesehen = new Map();
+  for (const g of lv) for (const p of g.positionen || []) gesehen.set(p.oz, (gesehen.get(p.oz) || 0) + 1);
+  const je = new Map();
+  for (const g of lv) for (const p of g.positionen || []) {
+    const liste = [];
+    if (gesehen.get(p.oz) > 1) liste.push('doppelte OZ');
+    if (p.menge == null || p.menge === '') liste.push('leere Menge');
+    if (!p.einheit) liste.push('keine Einheit');
+    if ((p.kurztext || '').length > 70) liste.push('Kurztext länger als 70');
+    if (!/^\d{2}\.\d{4}$/.test(p.oz || '')) liste.push('OZ passt nicht zu TT.PPPP');
+    je.set(p, liste);
+  }
+  return je;
 }
 
 function tx(t, codecName) {

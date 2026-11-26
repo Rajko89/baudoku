@@ -6,8 +6,9 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { leseMappe, schreibeXlsx } from '../gaeb/js/excel.js';
 import {
-  schreibeD83, schreibeP83,   liesD83, liesP83, vergleiche, zeichensatzFuer, kurztextAus, pruefeLv,
+  schreibeD83, schreibeP83,   liesD83, liesP83, vergleiche, zeichensatzFuer, kurztextAus, pruefeLv, leseGaeb,
 } from '../gaeb/js/gaeb.js';
+import { baueLvPdf } from '../gaeb/js/pdf.js';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(join(root, '../gaeb/js/gaeb.js'));
@@ -216,10 +217,33 @@ test('Mehrzeilige Langtexte mit Umlauten bleiben erhalten und die Datei hat nur 
   assert.match(liesP83(mitCr.bytes).lv[0].positionen[0].langtext, /Größe\nund Straße/);
 });
 
+test('Viewer liest Kopf, Positionsart und Preise, das PDF ist ein PDF', () => {
+  const gelesen = leseMappe(XLSX, mappe(), { quelle: 'export' });
+  const d83 = schreibeD83(gelesen.lv, kopf, 'cp850', 'null', true, []);
+  const ansicht = leseGaeb(d83.bytes);
+  assert.equal(ansicht.kopf.lvBez, kopf.lvBez);
+  assert.equal(ansicht.kopf.projekt, kopf.projekt);
+  assert.equal(ansicht.kopf.phase, '83');
+  assert.equal(ansicht.kopf.waehrung, 'EUR');
+  assert.equal(ansicht.lv[0].positionen[1].positionsart, 'Bedarf');
+  assert.equal(ansicht.lv[0].positionen[0].positionsart, 'Normal');
+  let text = Buffer.from(schreibeP83(gelesen.lv, kopf, 'null', []).bytes).toString('latin1');
+  text = text.replace('[ME]m²[end]', '[ME]m²[end]\r\n      [EP]12,50[end]\r\n      [GB]1.234,50[end]\r\n      [Art]Wahl[end]');
+  text = text.replace(/#end\[GAEB\](\d+)\|(\d+)/, (_, a, b) => `#end[GAEB]${a}|${Number(b) + 3}`);
+  const mitPreis = leseGaeb(Uint8Array.from(Buffer.from(text, 'latin1')));
+  assert.equal(mitPreis.lv[0].positionen[0].ep, '12.50');
+  assert.equal(mitPreis.lv[0].positionen[0].gp, '1234.50');
+  assert.equal(mitPreis.lv[0].positionen[0].positionsart, 'Wahl');
+  globalThis.jspdf = require(join(root, '../gaeb/vendor/jspdf.umd.min.js'));
+  const pdf = Buffer.from(baueLvPdf(ansicht, { mitLangtext: true }));
+  assert.equal(pdf.subarray(0, 5).toString(), '%PDF-');
+  assert.ok(pdf.length > 800);
+});
+
 test('App nennt sich selbst und hat einen eigenen Cache', () => {
   const app = readFileSync(join(root, '../gaeb/js/app.js'), 'utf8');
   assert.match(app, /GAEB-Umwandler/);
   assert.doesNotMatch(app, /xlsx_to_gaeb/);
-  assert.match(readFileSync(join(root, '../gaeb/sw.js'), 'utf8'), /gaeb-v1\.0\.1/);
+  assert.match(readFileSync(join(root, '../gaeb/sw.js'), 'utf8'), /gaeb-v1\.1\.0/);
   assert.equal(readdirSync(join(root, '../gaeb')).includes('index.html'), true);
 });

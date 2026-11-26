@@ -16,12 +16,13 @@
       <p class="mark">Lokal im Browser</p>
       <h1>GAEB-Umwandler</h1>
     </div>
-    <p class="lead">Excel nach GAEB 90 (.D83) und GAEB 2000 (.P83), und zurück. Die Datei bleibt auf diesem Gerät, es gibt keinen Upload.</p>
+    <p class="lead">Excel, GAEB 90 und GAEB 2000, hin und zurück, ansehen und als PDF. Die Datei bleibt auf diesem Gerät, es gibt keinen Upload.</p>
   </header>
   <main>
     <div class="tiles" role="tablist">
       <button type="button" class="tile on" id="tab-excel" role="tab" aria-selected="true" aria-controls="panel-excel">Excel → GAEB</button>
       <button type="button" class="tile" id="tab-gaeb" role="tab" aria-selected="false" aria-controls="panel-gaeb">GAEB → Excel</button>
+      <button type="button" class="tile" id="tab-viewer" role="tab" aria-selected="false" aria-controls="panel-viewer">Ansehen</button>
     </div>
 
     <section id="panel-excel" role="tabpanel">
@@ -57,7 +58,7 @@
     <section id="panel-gaeb" role="tabpanel" hidden>
       <form id="gaeb-form">
         <label class="drop" id="gaeb-drop">
-          <input id="gaeb-file" type="file" accept=".d81,.d83,.d84,.p81,.p83,.p84,.D81,.D83,.D84,.P81,.P83,.P84">
+          <input id="gaeb-file" type="file" accept=".d81,.d82,.d83,.d84,.d85,.d86,.p81,.p82,.p83,.p84,.p85,.p86,.D81,.D82,.D83,.D84,.D85,.D86,.P81,.P82,.P83,.P84,.P85,.P86">
           <span class="drop-title">D83, P83 oder Phase 81/84 hierher ziehen</span>
           <span class="drop-name" id="gaeb-name">Noch keine Datei</span>
         </label>
@@ -66,12 +67,25 @@
       </form>
     </section>
 
+    <section id="panel-viewer" role="tabpanel" hidden>
+      <form id="view-form">
+        <label class="drop" id="view-drop">
+          <input id="view-file" type="file" accept=".d81,.d82,.d83,.d84,.d85,.d86,.p81,.p82,.p83,.p84,.p85,.p86,.D81,.D82,.D83,.D84,.D85,.D86,.P81,.P82,.P83,.P84,.P85,.P86">
+          <span class="drop-title">D83 oder P83 ansehen, auch 81 bis 86</span>
+          <span class="drop-name" id="view-name">Noch keine Datei</span>
+        </label>
+        <button type="submit" class="go">Anzeigen</button>
+      </form>
+    </section>
+
     <section id="preview" class="preview" hidden aria-live="polite"></section>
+    <section id="viewer" class="preview viewer" hidden></section>
   </main>
   <footer>
     <p>Ziel sind GAEB 90 und GAEB 2000. Die D83 ist Codepage 850, die P83 Windows-1252 und nennt als Programm „GAEB-Umwandler“. Angaben in den Feldern bleiben in diesem Browser gespeichert.</p>
   </footer>
   <script src="./vendor/xlsx.full.min.js"></script>
+  <script src="./vendor/jspdf.umd.min.js"></script>
   <script type="module" src="./js/app.js"></script>
 </body>
 </html>

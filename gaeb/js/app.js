@@ -1,7 +1,8 @@
 import { leseMappe, schreibeXlsx } from './excel.js';
 import {
-  schreibeD83, schreibeP83, liesD83, liesP83, vergleiche, zeichensatzFuer, zusammenfassung,
+  schreibeD83, schreibeP83, liesD83, liesP83, vergleiche, zeichensatzFuer, zusammenfassung, leseGaeb, positionsHinweise,
 } from './gaeb.js';
+import { baueLvPdf, euroText, zeilenBetrag } from './pdf.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -130,6 +131,13 @@ function zeichne(titel, lv, extra) {
     row.className = 'downloads';
     row.id = 'downloads';
     for (const d of extra.downloads) row.append(downloadKnopf(d.bytes, d.name, d.mime, d.label));
+    if (extra.ansehen) {
+      const knopf = document.createElement('button');
+      knopf.type = 'button';
+      knopf.textContent = 'Im Viewer öffnen';
+      knopf.addEventListener('click', () => zeigeViewer(extra.ansehen, 'erzeugt.P83'));
+      row.append(knopf);
+    }
     box.append(row);
   }
   if (lv.length) box.append(tabelle(lv));
@@ -188,15 +196,16 @@ function ablegen(zone, input, datei) {
 
 $('tab-excel').addEventListener('click', () => waehle('excel'));
 $('tab-gaeb').addEventListener('click', () => waehle('gaeb'));
+$('tab-viewer').addEventListener('click', () => waehle('viewer'));
 
 function waehle(welche) {
-  const excel = welche === 'excel';
-  $('panel-excel').hidden = !excel;
-  $('panel-gaeb').hidden = excel;
-  $('tab-excel').classList.toggle('on', excel);
-  $('tab-gaeb').classList.toggle('on', !excel);
-  $('tab-excel').setAttribute('aria-selected', String(excel));
-  $('tab-gaeb').setAttribute('aria-selected', String(!excel));
+  for (const name of ['excel', 'gaeb', 'viewer']) {
+    const an = name === welche;
+    $(`panel-${name}`).hidden = !an;
+    $(`tab-${name}`).classList.toggle('on', an);
+    $(`tab-${name}`).setAttribute('aria-selected', String(an));
+  }
+  if (welche !== 'viewer') $('viewer').hidden = true;
   $('preview').hidden = true;
 }
 
@@ -254,6 +263,7 @@ $('excel-form').addEventListener('submit', async (e) => {
       { bytes: d83.bytes, name: `${name}.D83`, mime: 'application/octet-stream', label: 'D83 herunterladen (Codepage 850)' },
       { bytes: p83.bytes, name: `${name}.P83`, mime: 'application/octet-stream', label: 'P83 herunterladen' },
     );
+    extra.ansehen = p83.bytes;
     if (opt.ansi) {
       const ansi = schreibeD83(gelesen.lv, kopf, 'cp1252', opt.leere, opt.ascii, []);
       extra.hinweise.push(...zeichenHinweis(ansi.zeichen, 'D83 ANSI'));
@@ -272,7 +282,7 @@ $('gaeb-form').addEventListener('submit', async (e) => {
   const name = basisname(gaebDatei.name);
   let gelesen;
   const hinweise = [];
-  const leseOpt = { phasen: ['81', '83', '84'], tolerant: true };
+  const leseOpt = { phasen: ['81', '82', '83', '84', '85', '86'], tolerant: true };
   if (art.art === 'P') gelesen = liesP83(bytes, leseOpt);
   else {
     gelesen = liesD83(bytes, art.codec, leseOpt);
@@ -298,8 +308,202 @@ $('gaeb-form').addEventListener('submit', async (e) => {
   });
 });
 
+let viewDatei = null;
+let sicht = null;
+
+function geldOderLeer(wert) {
+  return wert == null || wert === '' ? '–' : euroText(wert);
+}
+
+function zaehlePositionen(knoten) {
+  return knoten.positionen.length + knoten.kinder.reduce((n, k) => n + zaehlePositionen(k), 0);
+}
+
+function baumAus(lv) {
+  const wurzel = [];
+  const stapel = [{ ebene: 0, kinder: wurzel }];
+  for (const g of lv) {
+    const ebene = g.ebene || 1;
+    while (stapel.length > 1 && stapel.at(-1).ebene >= ebene) stapel.pop();
+    const knoten = { ...g, kinder: [] };
+    stapel.at(-1).kinder.push(knoten);
+    stapel.push({ ebene, kinder: knoten.kinder });
+  }
+  return wurzel;
+}
+
+function passt(text, suche) {
+  return !suche || String(text || '').toLowerCase().includes(suche);
+}
+
+function knotenPasst(knoten, suche, nurHinweis, hinweise) {
+  const titel = passt(`${knoten.oz} ${knoten.titel}`, suche);
+  const positionen = (knoten.positionen || []).filter((p) => {
+    const text = `${p.oz} ${p.kurztext} ${p.langtext} ${p.positionsart}`;
+    if (suche && !titel && !passt(text, suche)) return false;
+    if (nurHinweis && !(hinweise.get(p) || []).length) return false;
+    return true;
+  });
+  const kinder = (knoten.kinder || []).map((k) => knotenPasst(k, suche, nurHinweis, hinweise)).filter(Boolean);
+  if (!positionen.length && !kinder.length && !(titel && !suche && !nurHinweis)) return null;
+  if (!positionen.length && !kinder.length) return null;
+  return { ...knoten, positionen, kinder };
+}
+
+function zeichneKnoten(knoten, hinweise, offen) {
+  const details = document.createElement('details');
+  details.className = 'titel';
+  details.open = offen;
+  const summary = document.createElement('summary');
+  const n = knoten.positionen.length;
+  let summe = 0;
+  let hatSumme = false;
+  for (const p of knoten.positionen) {
+    const betrag = zeilenBetrag(p);
+    if (betrag != null) { summe += betrag; hatSumme = true; }
+  }
+  summary.textContent = `${knoten.oz || '–'} ${knoten.titel || ''}`.trim()
+    + ` · ${n} Position${n === 1 ? '' : 'en'}`
+    + (hatSumme ? ` · Summe ${euroText(summe)}` : '');
+  details.append(summary);
+  for (const p of knoten.positionen) {
+    const art = document.createElement('article');
+    art.className = 'pos';
+    const kopf = document.createElement('div');
+    kopf.className = 'pos-kopf';
+    const oz = document.createElement('span');
+    oz.className = 'oz';
+    oz.textContent = p.oz || '–';
+    const artEl = document.createElement('span');
+    artEl.className = 'art';
+    artEl.textContent = p.positionsart || 'Normal';
+    kopf.append(oz, artEl);
+    const kurz = document.createElement('p');
+    kurz.textContent = p.kurztext || '';
+    art.append(kopf, kurz);
+    if (p.langtext) {
+      const lang = document.createElement('details');
+      lang.className = 'lang';
+      const ls = document.createElement('summary');
+      ls.textContent = 'Langtext';
+      const lp = document.createElement('p');
+      lp.textContent = p.langtext;
+      lang.append(ls, lp);
+      art.append(lang);
+    }
+    const zahlen = document.createElement('p');
+    zahlen.className = 'zahlen';
+    const menge = p.menge == null || p.menge === '' ? '–' : String(p.menge).replace('.', ',');
+    const betrag = zeilenBetrag(p);
+    zahlen.textContent = `Menge ${menge} ${p.einheit || ''} · EP ${geldOderLeer(p.ep)} · GP ${betrag == null ? '–' : euroText(betrag)}`;
+    art.append(zahlen);
+    for (const h of hinweise.get(p) || []) art.append(zeile('p', h, 'warn'));
+    details.append(art);
+  }
+  const innen = document.createElement('div');
+  innen.className = 'baum';
+  for (const kind of knoten.kinder) innen.append(zeichneKnoten(kind, hinweise, false));
+  if (knoten.kinder.length) details.append(innen);
+  return details;
+}
+
+function zeichneViewer() {
+  const box = $('viewer');
+  box.hidden = false;
+  box.replaceChildren();
+  if (!sicht) return;
+  const k = sicht.kopf || {};
+  box.append(zeile('h2', 'Leistungsverzeichnis'));
+  const stats = document.createElement('div');
+  stats.className = 'stats';
+  const positionen = (sicht.lv || []).reduce((n, g) => n + (g.positionen || []).length, 0);
+  for (const text of [
+    k.lvBez && `LV ${k.lvBez}`,
+    k.projekt && `Projekt ${k.projekt}`,
+    k.auftraggeber && `Auftraggeber ${k.auftraggeber}`,
+    k.datum && `Datum ${k.datum}${k.uhrzeit ? ` ${k.uhrzeit}` : ''}`,
+    k.phase && `Phase ${k.phase}`,
+    (k.waehrung || k.waeBez) && `Währung ${[k.waehrung, k.waeBez].filter(Boolean).join(' ')}`,
+    `${positionen} ${positionen === 1 ? 'Position' : 'Positionen'}`,
+    `${(sicht.lv || []).length} Titel`,
+  ].filter(Boolean)) stats.append(zeile('span', text));
+  box.append(stats);
+  for (const f of sicht.fehler || []) box.append(zeile('p', f, 'bad'));
+  for (const h of sicht.hinweise || []) box.append(zeile('p', h, 'warn'));
+  const tools = document.createElement('div');
+  tools.className = 'viewer-tools';
+  const suche = document.createElement('input');
+  suche.type = 'search';
+  suche.id = 'viewer-suche';
+  suche.placeholder = 'OZ oder Text';
+  suche.setAttribute('aria-label', 'Suche nach OZ oder Text');
+  const filter = document.createElement('label');
+  const filterBox = document.createElement('input');
+  filterBox.type = 'checkbox';
+  filterBox.id = 'viewer-hinweis';
+  filter.append(filterBox, document.createTextNode(' Nur mit Hinweisen'));
+  const lang = document.createElement('label');
+  const langBox = document.createElement('input');
+  langBox.type = 'checkbox';
+  langBox.id = 'viewer-lang';
+  langBox.checked = true;
+  lang.append(langBox, document.createTextNode(' PDF mit Langtext'));
+  const pdf = document.createElement('button');
+  pdf.type = 'button';
+  pdf.className = 'go';
+  pdf.id = 'viewer-pdf';
+  pdf.textContent = 'PDF herunterladen';
+  pdf.addEventListener('click', () => {
+    const bytes = baueLvPdf(sicht, { mitLangtext: langBox.checked });
+    const a = downloadKnopf(bytes, `${basisname(sicht.name)}.pdf`, 'application/pdf', 'PDF');
+    a.click();
+  });
+  tools.append(suche, filter, lang, pdf);
+  const zahl = document.createElement('p');
+  zahl.className = 'hint';
+  zahl.id = 'viewer-zahl';
+  const liste = document.createElement('div');
+  liste.className = 'baum';
+  liste.id = 'viewer-baum';
+  const malen = () => {
+    const q = suche.value.trim().toLowerCase();
+    const nur = filterBox.checked;
+    const hinweise = positionsHinweise(sicht.lv || []);
+    const treffer = baumAus(sicht.lv || []).map((k) => knotenPasst(k, q, nur, hinweise)).filter(Boolean);
+    const sichtbar = treffer.reduce((n, k) => n + zaehlePositionen(k), 0);
+    zahl.textContent = q || nur ? `${sichtbar} von ${positionen} Positionen` : '';
+    liste.replaceChildren();
+    const auf = positionen <= 40;
+    treffer.forEach((k, i) => liste.append(zeichneKnoten(k, hinweise, auf || i === 0)));
+    if (!treffer.length) liste.append(zeile('p', 'Keine Position passt zur Suche.', 'hint'));
+  };
+  suche.addEventListener('input', malen);
+  filterBox.addEventListener('change', malen);
+  box.append(tools, zahl, liste);
+  malen();
+  box.scrollIntoView({ block: 'start' });
+}
+
+function zeigeViewer(bytes, name) {
+  sicht = { ...leseGaeb(bytes), name };
+  waehle('viewer');
+  $('view-name').textContent = name;
+  zeichneViewer();
+}
+
+$('view-file').addEventListener('change', () => {
+  viewDatei = $('view-file').files[0] || null;
+  $('view-name').textContent = viewDatei ? viewDatei.name : 'Noch keine Datei';
+});
+$('view-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!viewDatei) return;
+  zeigeViewer(await dateiLesen(viewDatei), viewDatei.name);
+});
+
 ablegen($('excel-drop'), $('excel-file'));
 ablegen($('gaeb-drop'), $('gaeb-file'));
+ablegen($('view-drop'), $('view-file'));
 laden();
 
 if ('serviceWorker' in navigator) {
