@@ -1,6 +1,6 @@
 // Ein Editor für Foto, leeres Blatt und vorhandene Flächenskizzen.
 import * as db from './db.js';
-import { parseNum, canvasToBlob, uid } from './util.js';
+import { parseNum, canvasToBlob, uid, modal } from './util.js';
 import { emptyMeasure } from './geom.js';
 import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
@@ -8,6 +8,15 @@ import {
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
   constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
 } from './plan.js';
+
+export function zeichnungBeschriftung(caption) {
+  const text = String(caption || '').trim();
+  if (!text || text === 'Zeichnung' || text.startsWith('Zeichnung:')) return text || 'Zeichnung';
+  return `Zeichnung: ${text}`;
+}
+export function speicherArt(hatBestehendeKopie) {
+  return hatBestehendeKopie ? 'fragen' : 'anlegen';
+}
 
 const ARROW_LABELS = ['Kamin', 'Dachablauf', 'Notablauf', 'Wandanschluss', 'Dachrinne', 'Attika', 'Lichtkuppel', 'Entlüftung', 'Antenne', 'Gaube', 'Dachfenster'];
 const PART_NAMES = [...ARROW_LABELS, 'Blende', 'Traufe', 'Ortgang', 'First', 'Kehle', 'Grat'];
@@ -801,31 +810,74 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (sheet) { sheet.doc = doc; sheet.strokes = strokes; sheet.updated = Date.now(); await db.put('sheets', sheet); }
     if (sketch) { sketch.doc = doc; sketch.updated = Date.now(); await db.put('sketches', sketch); }
   }
-  async function veroeffentlicheFoto() {
-    if (!photo || !hatZeichnung(doc)) return null;
+  async function vorhandeneZeichnung() {
+    if (!photo) return null;
+    if (photo.source === 'drawing') return photo;
+    if (photo.markup?.exportId) {
+      const verknuepft = await db.get('photos', photo.markup.exportId);
+      if (verknuepft && verknuepft.projectId === photo.projectId && verknuepft.source === 'drawing') return verknuepft;
+    }
+    const alle = await db.byProject('photos', photo.projectId);
+    const treffer = alle.filter((p) => p.source === 'drawing' && p.sourcePhotoId === photo.id);
+    treffer.sort((a, b) => (b.time || 0) - (a.time || 0));
+    return treffer[0] || null;
+  }
+  async function brennzeichnung() {
     const canvas = renderDoc(img, doc, { hidePhoto, max: 2000 });
     const bild = await canvasToBlob(canvas, 'image/jpeg', 0.9);
     const klein = renderDoc(img, doc, { hidePhoto, max: 480 });
     const thumb = await canvasToBlob(klein, 'image/jpeg', 0.75);
-    const titel = photo.caption ? `Zeichnung: ${photo.caption}` : 'Zeichnung';
-    let kopie = photo.markup?.exportId ? await db.get('photos', photo.markup.exportId) : null;
-    if (!kopie || kopie.projectId !== photo.projectId) {
-      kopie = {
-        id: uid(), projectId: photo.projectId, created: Date.now(), time: Date.now(), timeKind: 'capture',
-        lat: photo.lat ?? null, lon: photo.lon ?? null, acc: photo.acc ?? null, address: photo.address || '',
-        source: 'drawing', sourcePhotoId: photo.id, caption: titel,
-        original: bild, stamped: bild, thumb, width: canvas.width, height: canvas.height, measure: emptyMeasure(),
-      };
-    } else {
-      Object.assign(kopie, {
-        time: Date.now(), caption: titel, original: bild, stamped: bild, thumb,
-        width: canvas.width, height: canvas.height, source: 'drawing', sourcePhotoId: photo.id,
-      });
-    }
+    return { canvas, bild, thumb };
+  }
+  async function legeFotoAn(bild, thumb, canvas, sourceId) {
+    const kopie = {
+      id: uid(), projectId: photo.projectId, created: Date.now(), time: Date.now(), timeKind: 'capture',
+      lat: photo.lat ?? null, lon: photo.lon ?? null, acc: photo.acc ?? null, address: photo.address || '',
+      source: 'drawing', sourcePhotoId: sourceId, caption: zeichnungBeschriftung(photo.caption),
+      original: bild, stamped: bild, thumb, width: canvas.width, height: canvas.height, measure: emptyMeasure(),
+    };
     await db.put('photos', kopie);
-    photo.markup = { ...(photo.markup || {}), doc, hidePhoto, strokes: legacyStrokes(doc), exportId: kopie.id };
-    await db.put('photos', photo);
     return kopie;
+  }
+  async function veroeffentlicheFoto() {
+    if (!photo || !hatZeichnung(doc)) return { art: 'leer' };
+    const bestehend = await vorhandeneZeichnung();
+    let art = 'neu';
+    if (bestehend) {
+      art = await modal({
+        title: 'Zeichnung speichern',
+        html: '<p>Für dieses Foto gibt es schon eine Zeichnung. Die bestehende Kopie bleibt, bis du dich entscheidest.</p>',
+        stack: true,
+        buttons: [
+          { label: 'Vorhandene Zeichnung aktualisieren', value: 'update', cls: 'primary' },
+          { label: 'Als neues Foto speichern', value: 'neu' },
+          { label: 'Abbrechen', value: null },
+        ],
+      });
+      if (!art) return { art: 'abbruch' };
+    }
+    const { canvas, bild, thumb } = await brennzeichnung();
+    if (art === 'update') {
+      const titel = bestehend.id === photo.id ? (photo.caption || 'Zeichnung') : zeichnungBeschriftung(photo.caption);
+      Object.assign(bestehend, {
+        time: Date.now(), caption: titel, original: bild, stamped: bild, thumb,
+        width: canvas.width, height: canvas.height, source: 'drawing',
+        sourcePhotoId: bestehend.sourcePhotoId || photo.sourcePhotoId || photo.id,
+      });
+      await db.put('photos', bestehend);
+      if (bestehend.id !== photo.id) {
+        photo.markup = { ...(photo.markup || {}), doc, hidePhoto, strokes: legacyStrokes(doc), exportId: bestehend.id };
+        await db.put('photos', photo);
+      }
+      return { art: 'update', kopie: bestehend };
+    }
+    const quelle = photo.source === 'drawing' ? (photo.sourcePhotoId || photo.id) : photo.id;
+    const kopie = await legeFotoAn(bild, thumb, canvas, quelle);
+    if (photo.source !== 'drawing' && !photo.markup?.exportId) {
+      photo.markup = { ...(photo.markup || {}), doc, hidePhoto, strokes: legacyStrokes(doc), exportId: kopie.id };
+      await db.put('photos', photo);
+    }
+    return { art: 'neu', kopie };
   }
   async function commit(next) {
     undo.push(clone(doc));
@@ -1332,8 +1384,10 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   el.querySelector('#draw-save').onclick = async () => {
     await persist();
     if (photo) {
-      const kopie = await veroeffentlicheFoto();
-      msg = kopie ? 'Als eigenes Foto gespeichert' : 'Gespeichert';
+      const ergebnis = await veroeffentlicheFoto();
+      msg = ergebnis.art === 'neu' ? 'Als eigenes Foto gespeichert'
+        : ergebnis.art === 'update' ? 'Vorhandene Zeichnung aktualisiert'
+          : ergebnis.art === 'abbruch' ? 'Nicht geändert' : 'Gespeichert';
     } else msg = 'Gespeichert';
     paint();
   };

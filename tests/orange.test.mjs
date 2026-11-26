@@ -24,7 +24,7 @@ test('Orange steht in der Palette und bleibt an der Linie gespeichert', () => {
   doc = setEdgeStyle(doc, doc.edges[0].id, { color: ORANGE });
   assert.equal(doc.edges[0].color, ORANGE);
   const mainSw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
-  assert.match(mainSw, /baudoku-v1\.7\.11/);
+  assert.match(mainSw, /baudoku-v1\.7\.12/);
   assert.match(mainSw, /\/gaeb\//);
 });
 

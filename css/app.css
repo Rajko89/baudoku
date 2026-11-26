@@ -35,6 +35,8 @@ main{padding:12px 12px calc(110px + var(--safe-b));max-width:900px;margin:0 auto
 .btn[disabled]{opacity:.45}
 .row{display:flex;gap:8px;flex-wrap:wrap}
 .row>.btn{flex:1 1 0}
+.modal .row.stack{flex-direction:column}
+.modal .row.stack>.btn{flex:none;width:100%;min-height:56px;white-space:normal;text-align:center}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 /* cards */

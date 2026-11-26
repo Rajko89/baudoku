@@ -56,7 +56,7 @@ export function toast(msg, ms = 2600) {
 }
 
 /** Modal-Dialog. fields: [{name,label,type,value,inputmode,placeholder,options}] buttons: [{label,value,cls}] */
-export function modal({ title = '', html = '', fields = [], buttons = [{ label: 'Abbrechen', value: null }, { label: 'OK', value: 'ok', cls: 'primary' }], onOpen } = {}) {
+export function modal({ title = '', html = '', fields = [], buttons = [{ label: 'Abbrechen', value: null }, { label: 'OK', value: 'ok', cls: 'primary' }], stack = false, onOpen } = {}) {
   return new Promise(resolve => {
     const root = $('#modal-root');
     const wrap = document.createElement('div'); wrap.className = 'modal';
@@ -65,7 +65,7 @@ export function modal({ title = '', html = '', fields = [], buttons = [{ label: 
         ? `<textarea name="${f.name}" placeholder="${esc(f.placeholder || '')}">${esc(f.value ?? '')}</textarea>`
         : f.type === 'select' ? `<select name="${f.name}">${f.options.map(o => `<option value="${esc(o.value)}" ${o.value == f.value ? 'selected' : ''}>${esc(o.label)}</option>`).join('')}</select>`
         : `<input name="${f.name}" type="${f.type || 'text'}" inputmode="${f.inputmode || ''}" value="${esc(f.value ?? '')}" placeholder="${esc(f.placeholder || '')}" autocomplete="off">`}</label>`).join('')}
-      <div class="row" style="margin-top:6px">${buttons.map((b, i) => `<button type="${b.value === 'ok' ? 'submit' : 'button'}" class="btn ${b.cls || ''}" data-i="${i}">${esc(b.label)}</button>`).join('')}</div></form>`;
+      <div class="row${stack ? ' stack' : ''}" style="margin-top:6px">${buttons.map((b, i) => `<button type="${b.value === 'ok' ? 'submit' : 'button'}" class="btn ${b.cls || ''}" data-i="${i}">${esc(b.label)}</button>`).join('')}</div></form>`;
     root.appendChild(wrap);
     const form = wrap.querySelector('form');
     const close = (v) => { wrap.remove(); resolve(v); };

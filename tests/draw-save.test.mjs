@@ -88,34 +88,53 @@ try {
     await page.locator('#draw-fold').click();
     await page.locator('#draw-save').click();
     await page.waitForFunction(() => (document.querySelector('#drawMsg')?.textContent || '').includes('Als eigenes Foto gespeichert'));
+    assert.equal(await page.locator('.modal').count(), 0, tag + ' erstes Speichern ohne Dialog');
+    await page.locator('#draw-unfold').click();
+    await page.locator('#draw-line').click();
+    await gesture([await at(0.2, 0.85), await at(0.75, 0.25)]);
+    await page.locator('#draw-fold').click();
+    await page.locator('#draw-save').click();
+    const aktualisieren = page.getByRole('button', { name: 'Vorhandene Zeichnung aktualisieren' });
+    await aktualisieren.waitFor();
+    const dialogBox = await aktualisieren.boundingBox();
+    assert.ok(dialogBox && dialogBox.height >= 48, tag + ' dialog');
+    await page.screenshot({ path: join(art, tag === 'phone' ? 'baudoku-zeichnung-dialog-390.png' : 'baudoku-zeichnung-dialog-820.png') });
+    await page.getByRole('button', { name: 'Abbrechen' }).click();
+    await page.waitForFunction(() => (document.querySelector('#drawMsg')?.textContent || '').includes('Nicht geändert'));
+    assert.equal(await page.evaluate(() => window.__baudoku.db.all('photos').then((a) => a.filter((p) => p.source === 'drawing').length)), 1, tag);
+    await page.locator('#draw-save').click();
+    await page.getByRole('button', { name: 'Als neues Foto speichern' }).click();
+    await page.waitForFunction(() => (document.querySelector('#drawMsg')?.textContent || '').includes('Als eigenes Foto gespeichert'));
+    assert.equal(await page.evaluate(() => window.__baudoku.db.all('photos').then((a) => a.filter((p) => p.source === 'drawing').length)), 2, tag);
     await page.locator('#drawBack').click();
     await page.locator('.hdr button[aria-label="Zurück"]').click();
     await page.locator('[data-draw]').nth(1).waitFor();
-    assert.equal(await page.locator('[data-draw]').count(), 2, tag);
+    assert.equal(await page.locator('[data-draw]').count(), 3, tag);
     await page.getByText('Zeichnung', { exact: false }).first().waitFor();
     const check = await page.evaluate(async (id) => {
       const photos = await window.__baudoku.db.all('photos');
       const orig = photos.find((p) => p.id === id);
-      const kopie = photos.find((p) => p.source === 'drawing' && p.sourcePhotoId === id);
+      const kopien = photos.filter((p) => p.source === 'drawing' && p.sourcePhotoId === id);
       const o1 = new Uint8Array(await orig.original.arrayBuffer());
       const s1 = new Uint8Array(await orig.stamped.arrayBuffer());
-      const k = new Uint8Array(await kopie.stamped.arrayBuffer());
+      const k = new Uint8Array(await kopien[0].stamped.arrayBuffer());
       return {
-        original: o1.byteLength, stamped: s1.byteLength, copy: k.byteLength,
+        original: o1.byteLength, stamped: s1.byteLength, copy: k.byteLength, anzahl: kopien.length,
         jpeg: k[0] === 0xff && k[1] === 0xd8, markup: (orig.markup?.strokes || []).length + (orig.markup?.doc?.texts || []).length,
-        exportId: orig.markup?.exportId === kopie.id, caption: kopie.caption,
+        exportId: kopien.some((p) => p.id === orig.markup?.exportId), caption: kopien[0].caption,
       };
     }, photoId);
     assert.equal(check.original, before.original, tag);
     assert.equal(check.stamped, before.stamped, tag);
     assert.equal(check.jpeg, true, tag);
     assert.ok(check.copy > 100, tag);
+    assert.equal(check.anzahl, 2, tag);
     assert.equal(check.exportId, true, tag);
     assert.match(check.caption, /^Zeichnung/);
     assert.ok(check.markup >= 1, tag);
     await page.reload();
     await page.locator('[data-draw]').nth(1).waitFor();
-    assert.equal(await page.locator('[data-draw]').count(), 2, tag + ' reload');
+    assert.equal(await page.locator('[data-draw]').count(), 3, tag + ' reload');
     if (tag === 'phone') {
       await page.locator('.ph').nth(1).click();
       await page.locator('#pimg').waitFor();
@@ -146,7 +165,7 @@ try {
         const bytes = file ? await z.file(file).async('uint8array') : null;
         return { n: (data.photos || []).length, jpeg: !!(bytes && bytes[0] === 255 && bytes[1] === 216) };
       }, [...readFileSync(zipPath)]);
-      assert.equal(zip.n, 2, 'zip');
+      assert.equal(zip.n, 3, 'zip');
       assert.equal(zip.jpeg, true, 'zip jpeg');
     } else {
       await page.locator('#bSel').click();

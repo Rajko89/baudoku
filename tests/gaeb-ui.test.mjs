@@ -98,7 +98,7 @@ try {
   const haupt = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/sw.js`);
   const zwei = await page.evaluate(async (url) => (await (await fetch(url, { cache: 'no-store' })).text()), `http://127.0.0.1:${port}/baudoku/zwei/sw.js`);
   assert.match(sw, /gaeb-v1\.1\.0/);
-  assert.match(haupt, /baudoku-v1\.7\.11/);
+  assert.match(haupt, /baudoku-v1\.7\.12/);
   assert.match(haupt, /\/gaeb\//);
   assert.match(zwei, /unregister/);
   assert.match(zwei, /baudoku2-/);
