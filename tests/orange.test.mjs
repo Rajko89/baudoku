@@ -14,7 +14,8 @@ const ORANGE = '#F57C00';
 
 test('Orange steht in der Palette und bleibt an der Linie gespeichert', () => {
   const oranges = LINE_COLORS.filter((c) => c.name === 'Orange');
-  assert.equal(LINE_COLORS.length, 9);
+  assert.equal(LINE_COLORS.length, 10);
+  assert.ok(LINE_COLORS.some((c) => c.name === 'Weiß' && c.hex === '#ffffff'));
   assert.equal(oranges.length, 1);
   assert.equal(oranges[0].hex, ORANGE);
   assert.ok(LINE_COLORS.some((c) => c.hex === '#ffd43b'));
@@ -24,7 +25,7 @@ test('Orange steht in der Palette und bleibt an der Linie gespeichert', () => {
   doc = setEdgeStyle(doc, doc.edges[0].id, { color: ORANGE });
   assert.equal(doc.edges[0].color, ORANGE);
   const mainSw = readFileSync(new URL('../sw.js', import.meta.url), 'utf8');
-  assert.match(mainSw, /baudoku-v1\.7\.12/);
+  assert.match(mainSw, /baudoku-v1\.7\.13/);
   assert.match(mainSw, /\/gaeb\//);
 });
 

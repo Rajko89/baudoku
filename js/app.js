@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.7.12';
+const APP_VERSION = 'baudoku-v1.7.13';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -253,10 +253,14 @@ async function viewProject(pid, tab, q) {
         <button type="button" class="btn primary" id="bShare" disabled>Teilen</button>
         <button type="button" class="btn" id="bDlMany" disabled>Herunterladen</button>
       </div>` : ''}
-      <div class="pgrid">${photos.map((x, i) => `<div class="shot"><div class="ph" data-nav="#/photo/${x.id}" data-pick="${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span><span class="pickmark" hidden></span>${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}<div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div><button type="button" class="btn block draw-label" data-draw="${x.id}">✎ Zeichnen</button></div>`).join('')}</div>
+      <div class="pgrid">${photos.map((x, i) => {
+        const amFoto = notes.filter((n) => n.photoId === x.id).map((n) => n.text).filter(Boolean).join(' · ');
+        return `<div class="shot"><div class="ph" data-nav="#/photo/${x.id}" data-pick="${x.id}" style="background-image:url(${url(x.thumb)})"><span class="tag">${i + 1}</span><span class="pickmark" hidden></span>${x.source === 'sketch' ? '<span class="tag m">Skizze</span>' : ''}${x.measure?.items?.length ? `<span class="tag m">📐 ${x.measure.items.length}</span>` : ''}<div class="cap">${esc(x.caption || fmtDateTime(x.time))}</div></div>${amFoto ? `<div class="photo-note">${esc(amFoto)}</div>` : ''}<button type="button" class="btn block draw-label" data-draw="${x.id}">✎ Zeichnen</button></div>`;
+      }).join('')}</div>
       ${photos.length ? '' : '<div class="empty">Noch keine Fotos.<br>Foto aufnehmen oder aus der Galerie wählen.</div>'}
       <div class="actions-sticky"><button class="btn primary block" id="bCam" style="min-height:64px;font-size:1.1rem">📷 Foto aufnehmen</button>
-      <div class="grid2" style="margin-top:8px"><button class="btn" id="bLive">🎥 Live-Kamera (Serie)</button><button class="btn" id="bGal">🖼 Aus Galerie</button></div></div>`;
+      <div class="grid2" style="margin-top:8px"><button class="btn" id="bLive">🎥 Live-Kamera (Serie)</button><button class="btn" id="bGal">🖼 Aus Galerie</button></div>
+      <button class="btn block" id="bSketch" style="margin-top:8px;min-height:54px">Leere Skizze</button></div>`;
     const upd = () => { const g = geoState(); const d = $('#gdot'), t = $('#gtxt'); if (!d) return;
       if (g.fix) { const a = g.fix.acc; d.className = 'dot ' + (a <= 15 ? 'ok' : a <= 50 ? 'mid' : 'bad'); t.textContent = `GPS ±${fmtNum(a, 0)} m · ${fmtCoord(g.fix.lat, g.fix.lon, 5)}`; }
       else { d.className = 'dot' + (g.err ? ' bad' : ''); t.textContent = !g.supported ? 'GPS nicht unterstützt – Datum wird trotzdem gestempelt' : g.err ? g.err + ' – Datum wird gestempelt, Ort fehlt' : 'GPS wird gesucht …'; } };
@@ -308,6 +312,7 @@ async function viewProject(pid, tab, q) {
       for (const it of items) downloadBlob(it.blob, it.name);
       if (items.length) toast('Download gestartet');
     };
+    $('#bSketch').onclick = () => neueSkizze(pid);
     $('#bCam').onclick = () => { startGeo(); inCam.click(); };
     $('#bGal').onclick = () => inGal.click();
     $('#bLive').onclick = async () => { startGeo(); let chain = Promise.resolve(); const ok = await liveCamera(b => { chain = chain.then(() => addPhoto(pid, b, 'live')).catch(console.error); }); await chain; if (ok) reload(); };
@@ -474,6 +479,7 @@ async function viewPhoto(id) {
   const items = ph.measure?.items || [];
   APP.innerHTML = header(`Foto ${i + 1} / ${all.length}`, { back: `#/p/${ph.projectId}?tab=photos`, sub: p?.name, right: `<button class="ib" ${prev ? `data-nav="#/photo/${prev.id}"` : 'disabled'} aria-label="Vorheriges">‹</button><button class="ib" ${next ? `data-nav="#/photo/${next.id}"` : 'disabled'} aria-label="Nächstes">›</button>` }) +
     `<main><img class="photo-full" id="pimg" src="${url(ph.stamped)}" alt="Foto">
+    ${notes.length ? `<div class="card photo-notes" id="photoNotes"><b>Notiz am Foto</b>${notes.map(n => `<div class="note"><b>${fmtDateTime(n.created)}</b><br>${esc(n.text)}</div>`).join('')}</div>` : ''}
     <div class="grid2" style="margin-top:8px"><button class="btn primary" id="sharePh">Teilen</button><button class="btn" id="dl">Herunterladen</button></div>
     <button class="btn primary block" id="drawOpen" style="margin-top:8px">✎ Zeichnen${ph.markup?.strokes?.length ? ` (${ph.markup.strokes.length})` : ''}</button>
     <div class="row" style="margin:8px 0"><button class="btn sm" data-v="stamped">Mit Stempel</button><button class="btn sm" data-v="original">Original</button></div>
@@ -483,7 +489,6 @@ async function viewPhoto(id) {
       <b>GPS</b><span>${ph.lat != null ? `<a href="https://www.openstreetmap.org/?mlat=${ph.lat}&mlon=${ph.lon}#map=19/${ph.lat}/${ph.lon}" target="_blank" rel="noopener">${fmtCoord(ph.lat, ph.lon)}</a>${ph.acc != null ? ` ±${fmtNum(ph.acc, 0)} m` : ''}` : 'nicht verfügbar'}</span>
       <b>Adresse</b><span>${esc(ph.address || '–')}</span><b>Größe</b><span>${ph.width} × ${ph.height} px</span></div></div>
     ${items.length ? `<div class="card"><b>Messungen</b><div class="mlist">${items.map(it => `<div class="mi"><span class="n">${esc(it.name)}</span><span class="v">${fmtVal(measureValue(ph.measure, it))}</span></div>`).join('')}</div></div>` : ''}
-    ${notes.length ? `<div class="card"><b>Notizen zum Foto</b>${notes.map(n => `<div class="note small" style="margin-top:8px"><b>${fmtDateTime(n.created)}</b><br>${esc(n.text)}</div>`).join('')}</div>` : ''}
     <div class="grid2"><button class="btn" id="reSt">🔄 Stempel neu</button><button class="btn" id="reLoc">📍 Standort jetzt</button>
     <button class="btn" id="cover">⭐ Titelbild</button></div>
     <button class="btn danger block" id="delPh" style="margin-top:8px">🗑 Foto löschen</button></main>`;
@@ -667,6 +672,32 @@ async function viewSheet(id) {
   const ed = mountDraw($('#drawroot'), { sheet, onBack: () => go(`#/p/${sheet.projectId}?tab=sketches`) });
   cleanup.push(() => ed.destroy());
   window.__baudoku.draw = ed;
+}
+async function neueSkizze(pid) {
+  const w = 1200, h = 1600, step = 80;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#b7c3cf';
+  g.lineWidth = 4;
+  for (let x = step; x < w; x += step) { g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke(); }
+  for (let y = step; y < h; y += step) { g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke(); }
+  const bild = await canvasToBlob(c, 'image/jpeg', 0.92);
+  const k = 480 / Math.max(w, h);
+  const t = document.createElement('canvas');
+  t.width = Math.round(w * k); t.height = Math.round(h * k);
+  t.getContext('2d').drawImage(c, 0, 0, t.width, t.height);
+  const thumb = await canvasToBlob(t, 'image/jpeg', 0.75);
+  const rec = {
+    id: uid(), projectId: pid, created: Date.now(), time: Date.now(), timeKind: 'sketch',
+    source: 'sketch', caption: 'Skizze', original: bild, stamped: bild, thumb,
+    width: w, height: h, measure: emptyMeasure(),
+  };
+  await db.put('photos', rec);
+  await touchProject(pid);
+  go(`#/draw/${rec.id}`);
 }
 async function viewDraw(id) {
   const ph = await db.get('photos', id); if (!ph) return go('#/');

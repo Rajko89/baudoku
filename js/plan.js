@@ -153,6 +153,12 @@ export function addStroke(doc, points, style = {}) {
   d.seq = [...(d.seq || []), { type: 'stroke', id }];
   return d;
 }
+export function deleteStroke(doc, id) {
+  const d = clone(doc);
+  d.strokes = (d.strokes || []).filter((s) => s.id !== id);
+  d.seq = (d.seq || []).filter((s) => !(s.type === 'stroke' && s.id === id));
+  return d;
+}
 export function addText(doc, x, y, text) {
   const d = clone(doc);
   const id = nid(d, 't');
@@ -425,7 +431,7 @@ export function fitSymbols(doc, iw, ih) {
   const box = symbolBox(iw, ih);
   let changed = false;
   const next = shapes.map((s) => {
-    if (!s?.symbol || s.kind === 'arrow') return s;
+    if (!s?.symbol || s.kind === 'arrow' || (s.kind !== 'circle' && s.kind !== 'rect')) return s;
     if (s.kind === 'circle') {
       if (near(s.d, box.d) && near(s.w, box.w) && near(s.h, box.h)) return s;
       changed = true;
@@ -442,16 +448,78 @@ export function fitSymbols(doc, iw, ih) {
   if (!changed) return doc;
   return { ...doc, shapes: next };
 }
+export function addDim(doc, x1, y1, x2, y2, value, unit, approx) {
+  const d = clone(doc);
+  d.dims = d.dims || [];
+  const id = nid(d, 'd');
+  d.dims.push({
+    id, x1, y1, x2, y2,
+    value: value == null || value === '' ? null : +value,
+    unit: unit || 'm', approx: !!approx,
+  });
+  return d;
+}
+export function patchDim(doc, id, patch) {
+  const d = clone(doc);
+  const row = (d.dims || []).find((x) => x.id === id);
+  if (row) Object.assign(row, patch);
+  return d;
+}
+export function deleteDim(doc, id) {
+  const d = clone(doc);
+  d.dims = (d.dims || []).filter((x) => x.id !== id);
+  return d;
+}
+export function dimLength(dim) {
+  return Math.hypot((dim.x2 || 0) - (dim.x1 || 0), (dim.y2 || 0) - (dim.y1 || 0));
+}
+export function setScaleFromDim(doc, dimId) {
+  const d = clone(doc);
+  const dim = (d.dims || []).find((x) => x.id === dimId);
+  const meters = dim && dim.value != null && !dim.approx ? toMeters(dim.value, dim.unit) : null;
+  const len = dim ? dimLength(dim) : 0;
+  if (!meters || len < 1e-6) return d;
+  d.scale = { metersPerNorm: meters / len, dimId };
+  return d;
+}
+export function suggestMeters(doc, x1, y1, x2, y2) {
+  if (!doc?.scale?.metersPerNorm) return null;
+  return dimLength({ x1, y1, x2, y2 }) * doc.scale.metersPerNorm;
+}
+export function addMarker(doc, x, y, note) {
+  const d = clone(doc);
+  d.markers = d.markers || [];
+  const n = d.markers.reduce((m, k) => Math.max(m, k.n || 0), 0) + 1;
+  const id = nid(d, 'm');
+  d.markers.push({ id, n, x, y, note: String(note || '') });
+  return d;
+}
+export function patchMarker(doc, id, patch) {
+  const d = clone(doc);
+  const row = (d.markers || []).find((x) => x.id === id);
+  if (row) Object.assign(row, patch);
+  return d;
+}
+export function deleteMarker(doc, id) {
+  const d = clone(doc);
+  d.markers = (d.markers || []).filter((x) => x.id !== id);
+  return d;
+}
+
 export function addShape(doc, shape) {
   const d = clone(doc);
   d.shapes = d.shapes || [];
   const id = nid(d, 'h');
-  const kind = shape.kind === 'circle' ? 'circle' : shape.kind === 'arrow' ? 'arrow' : 'rect';
+  const extra = ['damage', 'leak', 'water', 'gutter', 'penetration', 'mark'].includes(shape.kind);
+  const kind = extra ? shape.kind : shape.kind === 'circle' ? 'circle' : shape.kind === 'arrow' ? 'arrow' : 'rect';
   const row = { id, kind, x: shape.x, y: shape.y, color: shape.color || '#111111', dash: !!shape.dash };
   if (kind === 'arrow') {
     row.x2 = +shape.x2;
     row.y2 = +shape.y2;
     row.text = String(shape.text || '');
+  } else if (extra) {
+    row.d = shape.d || 0.08;
+    row.symbol = true;
   } else {
     row.w = shape.w;
     row.h = shape.h;
@@ -726,7 +794,7 @@ function pointIn(nodes, x, y) {
 }
 export function findCycles(doc) {
   const adj = new Map();
-  for (const e of doc.edges) {
+  for (const e of doc.edges || []) {
     if (!adj.has(e.a)) adj.set(e.a, []);
     if (!adj.has(e.b)) adj.set(e.b, []);
     adj.get(e.a).push(e);
@@ -735,7 +803,7 @@ export function findCycles(doc) {
   const seen = new Set();
   const cycles = [];
   const other = (e, n) => (e.a === n ? e.b : e.a);
-  for (const e0 of doc.edges) for (const start of [e0.a, e0.b]) {
+  for (const e0 of doc.edges || []) for (const start of [e0.a, e0.b]) {
     if (seen.has(e0.id + '>' + start)) continue;
     const nodes = [start];
     let prev = start, curEdge = e0, cur = other(e0, start);
@@ -816,7 +884,7 @@ function wrapPi(a) {
   while (a < -Math.PI) a += Math.PI * 2;
   return a;
 }
-export function angleSnap(doc, start, x, y, tol = ANGLE_TOL) {
+export function angleSnap(doc, start, x, y, tol = ANGLE_TOL, opts = {}) {
   const sx = start.x, sy = start.y;
   const len = Math.hypot(x - sx, y - sy);
   if (len < 1e-6) return null;
@@ -838,7 +906,9 @@ export function angleSnap(doc, start, x, y, tol = ANGLE_TOL) {
     if (!best || ad < best.ad - 1e-9 || (Math.abs(ad - best.ad) <= 1e-9 && pri < best.pri)) best = { ad, target, edgeId, pri };
   };
   for (const c of connected) for (const t of c.dirs) consider(t, c.edgeId, 0);
-  for (const t of [0, Math.PI / 2, Math.PI, -Math.PI / 2]) consider(t, null, 1);
+  const axes = [0, Math.PI / 2, Math.PI, -Math.PI / 2];
+  if (opts.diagonals) axes.push(Math.PI / 4, -Math.PI / 4, (3 * Math.PI) / 4, (-3 * Math.PI) / 4);
+  for (const t of axes) consider(t, null, 1);
   if (!best) return null;
   let edgeId = best.edgeId;
   if (!edgeId) {

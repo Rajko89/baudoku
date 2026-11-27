@@ -70,7 +70,7 @@ try {
     const res = await fetch(url, { cache: 'no-store' });
     return { status: res.status, text: await res.text() };
   }, zwei);
-  assert.match(mainSw, /baudoku-v1\.7\.12/);
+  assert.match(mainSw, /baudoku-v1\.7\.13/);
   assert.match(mainSw, /startsWith\('baudoku-'\)/);
   assert.match(mainSw, /\/gaeb\//);
   assert.match(mainSw, /\/zwei\//);

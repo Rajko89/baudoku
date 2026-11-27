@@ -6,7 +6,8 @@ import {
   emptyDoc, addLine, addStroke, addText, editText, moveText, deleteText, setMeasure, setEdgeStyle, toggleRight, setParallel,
   snapTarget, importLegacyStrokes, importLegacySketch, legacyStrokes,
   nodeById, edgeById, fmtNum, evaluateFaces, faceEvalAt, angleSnap, rightAtJoin, moveNode, moveEdge, setFaceOffset,
-  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, addShape, patchShape, deleteShape, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
+  constrainEndpoint, placeEndpoint, deleteEdge, splitEdgeAt, moveSplitPoint, isSplitNode, setEdgeName, edgeTitle, namedMeasure, addShape, patchShape, deleteShape, deleteStroke, symbolBox, fitSymbols, arrowSpan, uprightAngle, snapAngle, arrowLabelPlace,
+  addDim, patchDim, deleteDim, setScaleFromDim, suggestMeters, addMarker, patchMarker, deleteMarker,
 } from './plan.js';
 
 export function zeichnungBeschriftung(caption) {
@@ -32,6 +33,12 @@ export const LINE_COLORS = [
   { name: 'Rot', hex: '#e03131' },
   { name: 'Orange', hex: '#F57C00' },
   { name: 'Schwarz', hex: '#111111' },
+  { name: 'Weiß', hex: '#ffffff' },
+];
+const ICON_KINDS = new Set(['damage', 'leak', 'water', 'gutter', 'penetration', 'mark']);
+const SYMBOL_BUTTONS = [
+  ['arrow', 'Pfeil'], ['mark', 'Kreis'], ['damage', 'Schaden'], ['leak', 'Undicht'],
+  ['water', 'Wasserlauf'], ['gutter', 'Dachrinne'], ['penetration', 'Durchdringung'],
 ];
 function edgeLook(e) {
   return { color: e.color || (e.free ? '#7048e8' : '#1f2933'), dash: e.dash != null ? !!e.dash : !!e.free };
@@ -134,6 +141,123 @@ function paintText(ctx, x, y, text, ang, size) {
   ctx.fillText(text || '', 0, 0);
   ctx.restore();
 }
+function dimCaption(d) {
+  if (d.value == null || !isFinite(+d.value)) return '';
+  const text = `${fmtNum(d.value)} ${d.unit || 'm'}`;
+  return d.approx ? `ca. ${text}` : text;
+}
+function paintDimLine(ctx, x1, y1, x2, y2, label, selected, z = 1) {
+  const dx = x2 - x1, dy = y2 - y1;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const head = Math.max(8, 11 * z);
+  const wing = head * 0.42;
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = selected ? '#0b7285' : MEASURE;
+  ctx.lineWidth = Math.max(1.6, (selected ? 2.6 : 1.7) * z);
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 + ux * head - uy * wing, y1 + uy * head + ux * wing);
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x1 + ux * head + uy * wing, y1 + uy * head - ux * wing);
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - ux * head - uy * wing, y2 - uy * head + ux * wing);
+  ctx.moveTo(x2, y2);
+  ctx.lineTo(x2 - ux * head + uy * wing, y2 - uy * head - ux * wing);
+  ctx.stroke();
+  if (label) {
+    const ang = readable(Math.atan2(dy, dx));
+    ctx.translate((x1 + x2) / 2, (y1 + y2) / 2);
+    ctx.rotate(ang);
+    ctx.font = `700 ${Math.max(13, 14 * z)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 4 * z;
+    ctx.strokeStyle = '#fff';
+    ctx.strokeText(label, 0, -7 * z);
+    ctx.fillStyle = MEASURE;
+    ctx.fillText(label, 0, -7 * z);
+  }
+  ctx.restore();
+}
+function paintMarkerDot(ctx, x, y, n, selected, z = 1) {
+  const r = Math.max(13, 15 * z);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = selected ? '#0b7285' : '#e03131';
+  ctx.fill();
+  ctx.lineWidth = 2 * z;
+  ctx.strokeStyle = '#fff';
+  ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 ${Math.max(12, 13 * z)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(String(n), x, y + 0.5);
+  ctx.restore();
+}
+function paintIcon(ctx, kind, x, y, r, color, selected, z = 1) {
+  ctx.save();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  if (selected) {
+    ctx.beginPath();
+    ctx.arc(x, y, r + 5 * z, 0, Math.PI * 2);
+    ctx.strokeStyle = '#0b7285';
+    ctx.lineWidth = 2 * z;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = color || '#111111';
+  ctx.fillStyle = color || '#111111';
+  ctx.lineWidth = Math.max(1.15, 1.35 * z);
+  if (kind === 'mark') {
+    ctx.beginPath(); ctx.arc(x, y, r * 0.72, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.arc(x, y, Math.max(1.5, 2 * z), 0, Math.PI * 2); ctx.fill();
+  } else if (kind === 'damage') {
+    ctx.beginPath();
+    ctx.moveTo(x - r, y - r * 0.15);
+    ctx.lineTo(x - r * 0.25, y + r * 0.2);
+    ctx.lineTo(x + r * 0.15, y - r * 0.35);
+    ctx.lineTo(x + r, y + r * 0.2);
+    ctx.stroke();
+  } else if (kind === 'leak') {
+    ctx.beginPath();
+    ctx.moveTo(x, y - r);
+    ctx.bezierCurveTo(x + r * 0.85, y - r * 0.05, x + r * 0.6, y + r * 0.75, x, y + r * 0.75);
+    ctx.bezierCurveTo(x - r * 0.6, y + r * 0.75, x - r * 0.85, y - r * 0.05, x, y - r);
+    ctx.stroke();
+  } else if (kind === 'water') {
+    ctx.beginPath();
+    ctx.moveTo(x - r, y);
+    ctx.quadraticCurveTo(x - r * 0.45, y - r * 0.45, x, y);
+    ctx.quadraticCurveTo(x + r * 0.45, y + r * 0.45, x + r * 0.72, y);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + r * 0.72, y);
+    ctx.lineTo(x + r * 0.38, y - r * 0.28);
+    ctx.moveTo(x + r * 0.72, y);
+    ctx.lineTo(x + r * 0.38, y + r * 0.28);
+    ctx.stroke();
+  } else if (kind === 'gutter') {
+    ctx.beginPath();
+    ctx.moveTo(x - r, y - r * 0.45);
+    ctx.lineTo(x - r, y + r * 0.2);
+    ctx.quadraticCurveTo(x, y + r * 0.95, x + r, y + r * 0.2);
+    ctx.lineTo(x + r, y - r * 0.45);
+    ctx.stroke();
+  } else if (kind === 'penetration') {
+    ctx.beginPath(); ctx.arc(x, y, r * 0.68, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x - r * 0.38, y); ctx.lineTo(x + r * 0.38, y);
+    ctx.moveTo(x, y - r * 0.38); ctx.lineTo(x, y + r * 0.38);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
 function paintDoc(ctx, doc, w, h, selected) {
   ctx.lineJoin = 'round'; ctx.lineCap = 'round';
   drawStrokes(ctx, (doc.strokes || []).map((s) => ({ points: s.points, width: s.width || 0.012, color: s.color })), w, h);
@@ -176,7 +300,14 @@ function paintDoc(ctx, doc, w, h, selected) {
     }
   }
   for (const t of doc.texts || []) paintText(ctx, t.x * w, t.y * h, t.text, t.ang || 0, Math.max(16, w / 36));
+  const zDoc = Math.max(1, w / 700);
+  for (const d of doc.dims || []) paintDimLine(ctx, d.x1 * w, d.y1 * h, d.x2 * w, d.y2 * h, dimCaption(d), selected === d.id, zDoc);
+  for (const m of doc.markers || []) paintMarkerDot(ctx, m.x * w, m.y * h, m.n, selected === m.id, zDoc);
   for (const s of doc.shapes || []) {
+    if (ICON_KINDS.has(s.kind)) {
+      paintIcon(ctx, s.kind, s.x * w, s.y * h, (s.d || 0.08) / 2 * w, s.color, selected === s.id, zDoc);
+      continue;
+    }
     if (s.kind === 'arrow') {
       paintArrow(ctx, s.x * w, s.y * h, (s.x2 ?? s.x) * w, (s.y2 ?? s.y) * h, { color: s.color, dash: !!s.dash, lw: Math.max(4, w / 140), z: Math.max(1, w / 700), text: s.text || '', side: s.side });
       continue;
@@ -228,12 +359,23 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let pen = doc.pen || { width: 0.012, color: '#111111' };
   let lineColor = '#111111';
   let lineDash = false;
+  try {
+    const ink = JSON.parse(localStorage.getItem('baudoku-ink') || 'null');
+    if (ink?.color) { lineColor = ink.color; pen = { ...pen, color: ink.color, width: ink.width || pen.width }; }
+    else if (ink?.width) pen = { ...pen, width: ink.width };
+  } catch { /* letzte Wahl bleibt der Standard */ }
   let undo = [];
+  let redo = [];
+  let snapOn = localStorage.getItem('baudoku-snap') !== '0';
+  let symbolsOpen = false;
   let active = null;
   let selectedEdge = null;
   let selectedText = null;
   let selectedShape = null;
   let selectedNode = null;
+  let selectedDim = null;
+  let selectedMarker = null;
+  let selectedStroke = null;
   let detail = null;
   let arm = null;
   let ann = [];
@@ -250,7 +392,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   let lastTapX = 0;
   let lastTapY = 0;
   let down = null;
-  const title = sheet?.title || sketch?.title || 'Zeichnen';
+  const title = sheet?.title || sketch?.title || (photo?.source === 'sketch' ? 'Skizze' : 'Zeichnen');
   const el = document.createElement('div');
   el.className = 'draw';
   el.innerHTML = `<header class="hdr"><button type="button" class="ib" id="drawBack" aria-label="Zurück">←</button><h1 id="drawTitle"></h1></header>
@@ -260,7 +402,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" data-w="0.012">mittel</button>
       <button type="button" data-w="0.022">groß</button>
       <button type="button" id="draw-dash">gestrichelt</button>
-      ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}${c.hex.toLowerCase() === '#f57c00' ? ' ora' : ''}">${c.name}</button>`).join('')}
+      ${LINE_COLORS.map((c) => `<button type="button" data-c="${c.hex}" class="swatch${c.hex === '#ffd43b' ? ' yel' : ''}${c.hex.toLowerCase() === '#f57c00' ? ' ora' : ''}${c.hex === '#ffffff' ? ' wht' : ''}">${c.name}</button>`).join('')}
       <div id="arrowLabels" class="arrow-labels" hidden></div>
       <div id="lineNames" class="arrow-labels" hidden></div>
     </div></div>
@@ -273,6 +415,15 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     </form>
     <div id="drawCtx"></div>
     <div id="drawDock">
+    <div class="draw-history">
+      <button type="button" id="draw-undo"><span>↩</span>Rückgängig</button>
+      <button type="button" id="draw-redo"><span>↪</span>Wiederholen</button>
+      <button type="button" id="draw-delete"><span>⌫</span>Löschen</button>
+      <button type="button" id="draw-snap" class="on"><span>∠</span>Einrasten</button>
+    </div>
+    <div id="symbolBar" hidden>
+      ${SYMBOL_BUTTONS.map(([k, name]) => `<button type="button" data-sym="${k}">${name}</button>`).join('')}
+    </div>
     <div class="draw-tools">
       <button type="button" id="draw-pen"><span>✎</span>Stift</button>
       <button type="button" id="draw-line" class="on"><span>／</span>Linie</button>
@@ -283,8 +434,11 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       <button type="button" id="draw-arrow"><span>➜</span>Pfeil</button>
       <button type="button" id="draw-text"><span>T</span>Text</button>
       <button type="button" id="draw-measure"><span>↔</span>Maß</button>
+      <button type="button" id="draw-dim"><span>⇔</span>Maßkette</button>
+      <button type="button" id="draw-marker"><span>1</span>Marker</button>
+      <button type="button" id="draw-symbols"><span>◉</span>Symbole</button>
+      <button type="button" id="draw-scale"><span>≡</span>Maßstab</button>
       <button type="button" id="draw-area"><span>▢</span>Fläche</button>
-      <button type="button" id="draw-undo"><span>↩</span>Rückgängig</button>
       ${photo ? '<button type="button" id="draw-photo"><span>▣</span><b>Foto aus</b></button>' : ''}
       <button type="button" id="draw-fold" aria-expanded="true"><span>▾</span>Weniger</button>
     </div>
@@ -469,10 +623,20 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     else if (active?.tool === 'text' && active.moved) preview = doc;
     paintFitted(ctx, preview, selectedEdge);
     el.querySelector('#draw-undo').disabled = !undo.length;
+    el.querySelector('#draw-redo').disabled = !redo.length;
+    const canDelete = !!(selectedEdge || selectedShape || selectedText || selectedDim || selectedMarker || selectedStroke);
+    el.querySelector('#draw-delete').disabled = !canDelete;
+    el.querySelector('#draw-snap').classList.toggle('on', snapOn);
     const zoomBtn = el.querySelector('#drawZoom');
     if (zoomBtn) zoomBtn.hidden = Math.abs(userZoom - 1) < 0.02;
     if (photoBtn) { photoBtn.querySelector('b').textContent = hidePhoto ? 'Foto an' : 'Foto aus'; photoBtn.classList.toggle('on', hidePhoto); }
-    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle', 'arrow'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    ['pen', 'line', 'free', 'edit', 'text', 'measure', 'area', 'rect', 'circle', 'arrow', 'dim', 'marker'].forEach((t) => el.querySelector('#draw-' + t).classList.toggle('on', tool === t));
+    el.querySelector('#draw-symbols').classList.toggle('on', symbolsOpen);
+    const symbolBar = el.querySelector('#symbolBar');
+    if (symbolBar) {
+      symbolBar.hidden = !symbolsOpen || !toolsOpen;
+      symbolBar.querySelectorAll('[data-sym]').forEach((b) => b.classList.toggle('on', b.dataset.sym === tool));
+    }
     const bar = el.querySelector('#penBar');
     const showInk = tool === 'pen' || detail === 'line' || detail === 'shape';
     bar.classList.toggle('on', showInk);
@@ -643,7 +807,22 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       ctx2.stroke();
       ctx2.setLineDash([]);
     };
-    for (const s of d.shapes || []) drawShape(s, selectedShape);
+    for (const s of d.shapes || []) {
+      if (ICON_KINDS.has(s.kind)) {
+        paintIcon(ctx2, s.kind, X(s.x), Y(s.y), (s.d || 0.08) / 2 * view.iw * view.s, s.color, selectedShape === s.id, z);
+        continue;
+      }
+      drawShape(s, selectedShape);
+    }
+    for (const dim of d.dims || []) paintDimLine(ctx2, X(dim.x1), Y(dim.y1), X(dim.x2), Y(dim.y2), dimCaption(dim), selectedDim === dim.id, z);
+    if (active?.tool === 'dim' && active.raw) {
+      const far = Math.hypot(active.raw[0] - active.x0, active.raw[1] - active.y0) > 0.01;
+      if (far) {
+        const sug = suggestMeters(doc, active.x0, active.y0, active.raw[0], active.raw[1]);
+        paintDimLine(ctx2, X(active.x0), Y(active.y0), X(active.raw[0]), Y(active.raw[1]), sug == null ? '' : `ca. ${fmtNum(sug)} m`, false, z);
+      }
+    }
+    for (const m of d.markers || []) paintMarkerDot(ctx2, X(m.x), Y(m.y), m.n, selectedMarker === m.id, z);
     if (active?.tool === 'arrow' && active.raw) {
       const far = Math.hypot(active.raw[0] - active.x0, active.raw[1] - active.y0) > 0.01;
       if (far) paintArrow(ctx2, X(active.x0), Y(active.y0), X(active.raw[0]), Y(active.raw[1]), { color: lineColor, dash: false, lw: 4 * z, z });
@@ -766,7 +945,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const list = [...(doc.shapes || [])].reverse();
     for (const s of list) {
       if (s.kind === 'arrow') { if (arrowPart(s, p)) return s; continue; }
-      if (s.kind === 'circle') {
+      if (s.kind === 'circle' || ICON_KINDS.has(s.kind)) {
         const dx = (p[0] - s.x) * kx;
         const dy = (p[1] - s.y) * ky;
         const vis = (s.d || 0) / 2 * kx;
@@ -783,6 +962,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
   }
   function symbolAt(kind, x, y) {
     const box = symbolBox(view.iw || img.naturalWidth || img.width || 1000, view.ih || img.naturalHeight || img.height || 1400);
+    if (ICON_KINDS.has(kind)) return { kind, x: clamp(x), y: clamp(y), d: Math.max(box.d * 6, 0.14), color: lineColor, symbol: true };
     if (kind === 'circle') return { kind: 'circle', x: clamp(x), y: clamp(y), d: box.d, w: box.w, h: box.h, color: lineColor, dash: false, symbol: true };
     const left = Math.max(0, Math.min(1 - box.w, x - box.w / 2));
     const top = Math.max(0, Math.min(1 - box.h, y - box.h / 2));
@@ -802,7 +982,51 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     return null;
   }
   function hatZeichnung(d) {
-    return !!((d.edges || []).length || (d.strokes || []).length || (d.texts || []).length || (d.shapes || []).length);
+    return !!((d.edges || []).length || (d.strokes || []).length || (d.texts || []).length || (d.shapes || []).length || (d.dims || []).length || (d.markers || []).length);
+  }
+  function hitDim(p) {
+    let best = null, bd = px(28);
+    for (const d of doc.dims || []) {
+      const dist = pointSeg(p[0], p[1], { x: d.x1, y: d.y1 }, { x: d.x2, y: d.y2 });
+      if (dist < bd) { bd = dist; best = d; }
+    }
+    return best;
+  }
+  function hitMarker(p) {
+    const r = 26 / (pxPerNorm() || 1);
+    for (const m of [...(doc.markers || [])].reverse()) {
+      if (Math.hypot(m.x - p[0], m.y - p[1]) <= r) return m;
+    }
+    return null;
+  }
+  function hitStroke(p) {
+    let best = null, bd = px(22);
+    for (const s of doc.strokes || []) {
+      const pts = s.points || [];
+      for (let i = 1; i < pts.length; i++) {
+        const dist = pointSeg(p[0], p[1], { x: pts[i - 1][0], y: pts[i - 1][1] }, { x: pts[i][0], y: pts[i][1] });
+        if (dist < bd) { bd = dist; best = s; }
+      }
+    }
+    return best;
+  }
+  function viewCenter() {
+    const nx = (canvas.width / 2 - view.ox) / ((view.iw * view.s) || 1);
+    const ny = (canvas.height / 2 - view.oy) / ((view.ih * view.s) || 1);
+    return [Math.max(0.08, Math.min(0.92, nx)), Math.max(0.08, Math.min(0.92, ny))];
+  }
+  function rememberInk() {
+    try { localStorage.setItem('baudoku-ink', JSON.stringify({ color: lineColor, width: pen.width })); } catch { /* Speicher voll oder gesperrt */ }
+  }
+  function clearPick() {
+    selectedEdge = null;
+    selectedNode = null;
+    selectedText = null;
+    selectedShape = null;
+    selectedDim = null;
+    selectedMarker = null;
+    selectedStroke = null;
+    detail = null;
   }
   async function persist() {
     const strokes = legacyStrokes(doc);
@@ -879,9 +1103,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     }
     return { art: 'neu', kopie };
   }
-  async function commit(next) {
-    undo.push(clone(doc));
+  function rememberUndo(snapshot) {
+    undo.push(snapshot);
     if (undo.length > 40) undo.shift();
+    redo = [];
+  }
+  async function commit(next) {
+    rememberUndo(clone(doc));
     doc = next;
     await persist();
     paint();
@@ -891,16 +1119,35 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     form.hidden = false;
     form.dataset.mode = mode;
     input.value = value || '';
-    input.inputMode = mode === 'measure' ? 'decimal' : 'text';
-    input.setAttribute('inputmode', mode === 'measure' ? 'decimal' : 'text');
-    unit.hidden = mode !== 'measure';
-    el.querySelector('#drawDel').hidden = mode === 'measure' ? !selectedEdge : !selectedText;
+    const decimal = mode === 'measure' || mode === 'dim';
+    input.inputMode = decimal ? 'decimal' : 'text';
+    input.setAttribute('inputmode', decimal ? 'decimal' : 'text');
+    input.placeholder = mode === 'dim' ? 'z. B. 3,45' : mode === 'marker' ? 'Kurze Notiz' : '';
+    unit.hidden = !decimal;
+    el.querySelector('#drawDel').hidden = mode === 'measure' || mode === 'dim' ? !(selectedEdge || selectedDim) : !(selectedText || selectedMarker);
     setTimeout(() => { if (gen === formGen && !form.hidden) { input.focus(); input.select?.(); } }, 30);
   }
   form.addEventListener('submit', async (ev) => {
     ev.preventDefault();
     const gen = formGen;
-    if (form.dataset.mode === 'measure' && selectedEdge) {
+    if (form.dataset.mode === 'dim' && selectedDim) {
+      const n = parseNum(input.value);
+      if (input.value.trim() && !isFinite(n)) { msg = 'Maß ungültig. Komma ist erlaubt, z. B. 3,45.'; paint(); return; }
+      const dim = (doc.dims || []).find((d) => d.id === selectedDim);
+      const typed = input.value.trim();
+      const suggested = form.dataset.suggest || '';
+      const same = typed && suggested && parseNum(typed) === parseNum(suggested);
+      let value = typed ? n : null;
+      let approx = !!(same && form.dataset.approx === '1');
+      if (!typed && dim && doc.scale) {
+        value = suggestMeters(doc, dim.x1, dim.y1, dim.x2, dim.y2);
+        approx = value != null;
+      }
+      msg = '';
+      await commit(patchDim(doc, selectedDim, { value, unit: unit.value, approx }));
+    } else if (form.dataset.mode === 'marker' && selectedMarker) {
+      await commit(patchMarker(doc, selectedMarker, { note: input.value.trim() }));
+    } else if (form.dataset.mode === 'measure' && selectedEdge) {
       const n = parseNum(input.value);
       if (input.value.trim() && !isFinite(n)) { msg = 'Maß ungültig. Komma ist erlaubt, z. B. 8,50.'; paint(); return; }
       msg = '';
@@ -921,14 +1168,16 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (gen === formGen) form.hidden = true;
   });
   el.querySelector('#drawDel').onclick = async () => {
-    if (selectedText) { await commit(deleteText(doc, selectedText)); selectedText = null; form.hidden = true; }
+    if (selectedText && form.dataset.mode !== 'marker' && form.dataset.mode !== 'dim') { await commit(deleteText(doc, selectedText)); selectedText = null; form.hidden = true; return; }
+    if (selectedMarker) { await commit(deleteMarker(doc, selectedMarker)); selectedMarker = null; form.hidden = true; return; }
+    if (selectedDim) { await commit(deleteDim(doc, selectedDim)); selectedDim = null; form.hidden = true; }
   };
 
   function placeEnd(start, x, y, free) {
-    const snap = snapTarget(doc, x, y, radiusNorm());
+    const snap = snapOn ? snapTarget(doc, x, y, radiusNorm()) : null;
     if (snap) return { end: snap, angled: null, mark: snap };
-    if (free) return { end: { x, y }, angled: null, mark: null };
-    const angled = angleSnap(doc, start, x, y);
+    if (free || !snapOn) return { end: { x, y }, angled: null, mark: null };
+    const angled = angleSnap(doc, start, x, y, undefined, { diagonals: true });
     if (angled) return { end: { x: angled.x, y: angled.y }, angled, mark: { x: angled.x, y: angled.y, kind: 'angle' } };
     return { end: { x, y }, angled: null, mark: null };
   }
@@ -984,9 +1233,40 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       selectedShape = s.id;
       selectedEdge = null;
       selectedText = null;
+      selectedDim = null;
+      selectedMarker = null;
+      selectedStroke = null;
       active = { tool: 'shape', id: s.id, mode: s.kind === 'arrow' ? (arrowPart(s, p) || 'shaft') : 'move', x: p[0], y: p[1], x0: p[0], y0: p[1], ox: s.x, oy: s.y, ox2: s.x2, oy2: s.y2, moved: false, origin: clone(doc) };
       paint();
     };
+    if (tool === 'dim') {
+      const dim = hitDim(p);
+      active = { tool: 'dim', x0: p[0], y0: p[1], raw: [p[0], p[1]], hit: dim?.id || null };
+      return;
+    }
+    if (tool === 'marker') {
+      const hit = hitMarker(p);
+      if (hit) {
+        clearPick();
+        selectedMarker = hit.id;
+        openForm('marker', hit.note || '');
+        paint();
+        return;
+      }
+      const next = addMarker(doc, p[0], p[1], '');
+      const id = next.markers[next.markers.length - 1].id;
+      commit(next).then(() => {
+        selectedMarker = id;
+        openForm('marker', '');
+        paint();
+      });
+      return;
+    }
+    if (ICON_KINDS.has(tool)) {
+      if (shapeHit) { grabShape(shapeHit); return; }
+      active = { tool: 'symbol', kind: tool, x0: p[0], y0: p[1], raw: [p[0], p[1]] };
+      return;
+    }
     if (tool === 'rect' || tool === 'circle' || tool === 'arrow') {
       if (shapeHit) { grabShape(shapeHit); return; }
       if (tool === 'arrow') { active = { tool: 'arrow', x0: p[0], y0: p[1], raw: [p[0], p[1]] }; return; }
@@ -1033,6 +1313,33 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     const glyph = hitAngle(p);
     if (glyph && tool !== 'line' && tool !== 'free') { active = { tool: 'angle', nodeId: glyph.id }; return; }
     if (tool === 'edit') {
+      const dim = hitDim(p);
+      if (dim) {
+        clearPick();
+        selectedDim = dim.id;
+        detail = 'dim';
+        active = { tool: 'movedim', id: dim.id, x: p[0], y: p[1], x0: p[0], y0: p[1], ox1: dim.x1, oy1: dim.y1, ox2: dim.x2, oy2: dim.y2, moved: false, origin: clone(doc) };
+        paint();
+        return;
+      }
+      const marker = hitMarker(p);
+      if (marker) {
+        clearPick();
+        selectedMarker = marker.id;
+        detail = 'marker';
+        active = { tool: 'movemarker', id: marker.id, x: p[0], y: p[1], x0: p[0], y0: p[1], ox: marker.x, oy: marker.y, moved: false, origin: clone(doc) };
+        paint();
+        return;
+      }
+      const stroke = hitStroke(p);
+      if (stroke && !hitEdge(p)) {
+        clearPick();
+        selectedStroke = stroke.id;
+        detail = 'stroke';
+        active = { tool: 'movestroke', id: stroke.id, x: p[0], y: p[1], x0: p[0], y0: p[1], moved: false, origin: clone(doc) };
+        paint();
+        return;
+      }
       const grab = nearestNode(p, 30);
       const edge = hitEdge(p);
       if (grab) {
@@ -1100,7 +1407,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       paint();
     } else if (active.tool === 'spin') {
       if (cssDist(active.x0, active.y0, p[0], p[1]) > 6) {
-        if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
+        if (!active.moved && active.origin) rememberUndo(active.origin);
         active.moved = true;
       }
       if (active.moved) {
@@ -1114,13 +1421,13 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       }
     } else if (active.tool === 'text') {
       if (cssDist(active.x0, active.y0, p[0], p[1]) > 12) {
-        if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
+        if (!active.moved && active.origin) rememberUndo(active.origin);
         active.moved = true;
       }
       if (active.moved) { doc = moveText(doc, active.id, p[0], p[1]); paint(); }
     } else if (active.tool === 'shape') {
       if (cssDist(active.x0, active.y0, p[0], p[1]) > 8) {
-        if (!active.moved && active.origin) { undo.push(active.origin); if (undo.length > 40) undo.shift(); }
+        if (!active.moved && active.origin) rememberUndo(active.origin);
         active.moved = true;
       }
       if (active.moved) {
@@ -1133,6 +1440,47 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
             s.y = active.oy + (p[1] - active.y);
             if (s.kind === 'arrow') { s.x2 = active.ox2 + (p[0] - active.x); s.y2 = active.oy2 + (p[1] - active.y); }
           }
+        }
+        paint();
+      }
+    } else if (active.tool === 'dim') {
+      active.raw = [p[0], p[1]];
+      paint();
+    } else if (active.tool === 'movedim') {
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 8) {
+        if (!active.moved && active.origin) rememberUndo(active.origin);
+        active.moved = true;
+      }
+      if (active.moved) {
+        const dim = (doc.dims || []).find((d) => d.id === active.id);
+        if (dim) {
+          const dx = p[0] - active.x, dy = p[1] - active.y;
+          dim.x1 = active.ox1 + dx; dim.y1 = active.oy1 + dy;
+          dim.x2 = active.ox2 + dx; dim.y2 = active.oy2 + dy;
+        }
+        paint();
+      }
+    } else if (active.tool === 'movemarker') {
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 8) {
+        if (!active.moved && active.origin) rememberUndo(active.origin);
+        active.moved = true;
+      }
+      if (active.moved) {
+        const marker = (doc.markers || []).find((m) => m.id === active.id);
+        if (marker) { marker.x = p[0]; marker.y = p[1]; }
+        paint();
+      }
+    } else if (active.tool === 'movestroke') {
+      if (cssDist(active.x0, active.y0, p[0], p[1]) > 8) {
+        if (!active.moved && active.origin) rememberUndo(active.origin);
+        active.moved = true;
+      }
+      if (active.moved) {
+        const base = (active.origin.strokes || []).find((s) => s.id === active.id);
+        const stroke = (doc.strokes || []).find((s) => s.id === active.id);
+        if (base && stroke) {
+          const dx = p[0] - active.x, dy = p[1] - active.y;
+          stroke.points = base.points.map((pt) => [pt[0] + dx, pt[1] + dy]);
         }
         paint();
       }
@@ -1185,6 +1533,51 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       const t = (doc.texts || []).find((x) => x.id === act.id);
       if (t) openForm('text-edit', t.text);
       else paint();
+    } else if (act.tool === 'dim') {
+      const p = act.raw || [act.x0, act.y0];
+      const moved = cssDist(act.x0, act.y0, p[0], p[1]) > 12;
+      if (!moved) {
+        if (act.hit) {
+          clearPick();
+          selectedDim = act.hit;
+          const dim = (doc.dims || []).find((d) => d.id === act.hit);
+          if (dim) {
+            form.dataset.suggest = dim.value == null ? '' : fmtNum(dim.value);
+            form.dataset.approx = dim.approx ? '1' : '';
+            unit.value = dim.unit || 'm';
+            openForm('dim', form.dataset.suggest);
+          }
+        }
+        paint();
+        return;
+      }
+      const suggested = suggestMeters(doc, act.x0, act.y0, p[0], p[1]);
+      const approx = suggested != null;
+      const next = addDim(doc, act.x0, act.y0, p[0], p[1], approx ? suggested : null, 'm', approx);
+      const id = next.dims[next.dims.length - 1].id;
+      await commit(next);
+      clearPick();
+      selectedDim = id;
+      form.dataset.suggest = approx ? fmtNum(suggested) : '';
+      form.dataset.approx = approx ? '1' : '';
+      unit.value = 'm';
+      openForm('dim', form.dataset.suggest);
+      msg = approx ? 'Vorschlag als ca. Bestätigen oder einen genauen Wert eintragen.' : 'Maß eintragen, z. B. 3,45 m.';
+      paint();
+    } else if (act.tool === 'movedim' || act.tool === 'movemarker' || act.tool === 'movestroke') {
+      if (act.moved) await persist();
+      else if (act.tool === 'movedim') {
+        const dim = (doc.dims || []).find((d) => d.id === act.id);
+        if (dim) {
+          form.dataset.suggest = dim.value == null ? '' : fmtNum(dim.value);
+          form.dataset.approx = dim.approx ? '1' : '';
+          unit.value = dim.unit || 'm';
+          openForm('dim', form.dataset.suggest);
+        }
+      } else if (act.tool === 'movemarker') {
+        const marker = (doc.markers || []).find((m) => m.id === act.id);
+        if (marker) openForm('marker', marker.note || '');
+      } else paint();
     } else if (act.tool === 'symbol') {
       const p = act.raw || [act.x0, act.y0];
       if (cssDist(act.x0, act.y0, p[0], p[1]) <= 14) {
@@ -1238,7 +1631,7 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     if (pointers.size > 0) { beginPinch(); return; }
     const movedPx = down ? Math.hypot(ev.clientX - down.x, ev.clientY - down.y) : 0;
     const tap = !down || movedPx <= 14;
-    const placing = tool === 'rect' || tool === 'circle' || tool === 'arrow';
+    const placing = tool === 'rect' || tool === 'circle' || tool === 'arrow' || tool === 'dim' || tool === 'marker' || ICON_KINDS.has(tool);
     const doubleShape = !down || tool === 'pen' || tool === 'measure' ? null : down.shape;
     if (tap && !(placing && !doubleShape) && Date.now() - lastTapAt < 360 && Math.hypot(ev.clientX - lastTapX, ev.clientY - lastTapY) < 32) {
       const textHit = !down || tool === 'measure' || placing ? null : down.text;
@@ -1321,10 +1714,11 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
       paint();
       return;
     }
-    if (b.dataset.w) pen = { ...pen, width: +b.dataset.w };
+    if (b.dataset.w) { pen = { ...pen, width: +b.dataset.w }; rememberInk(); }
     if (b.dataset.c) {
       pen = { ...pen, color: b.dataset.c };
       lineColor = b.dataset.c;
+      rememberInk();
       doc.pen = pen;
       if (selectedEdge) { await commit(setEdgeStyle(doc, selectedEdge, { color: b.dataset.c })); await refreshArea(); return; }
       if (selectedShape) { await commit(patchShape(doc, selectedShape, { color: b.dataset.c })); paint(); return; }
@@ -1334,16 +1728,76 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     paint();
   });
   el.querySelector('#draw-measure').onclick = () => { tool = 'measure'; paint(); };
+  el.querySelector('#draw-dim').onclick = () => { tool = 'dim'; symbolsOpen = false; paint(); };
+  el.querySelector('#draw-marker').onclick = () => { tool = 'marker'; symbolsOpen = false; paint(); };
+  el.querySelector('#draw-symbols').onclick = () => { symbolsOpen = !symbolsOpen; paint(); };
+  el.querySelector('#draw-scale').onclick = async () => {
+    if (!selectedDim) { msg = 'Zuerst eine Maßkette mit festem Wert antippen.'; paint(); return; }
+    const next = setScaleFromDim(doc, selectedDim);
+    if (!next.scale || next.scale === doc.scale) {
+      const dim = (doc.dims || []).find((d) => d.id === selectedDim);
+      msg = dim?.approx ? 'ca.-Werte sind kein Maßstab. Einen genauen Wert eintragen.' : 'Für den Maßstab einen Wert eintragen.';
+      paint();
+      return;
+    }
+    await commit(next);
+    msg = 'Maßstab gesetzt. Weitere Maße werden als ca. vorgeschlagen.';
+    paint();
+  };
+  el.querySelector('#symbolBar').addEventListener('click', async (ev) => {
+    const b = ev.target.closest('[data-sym]');
+    if (!b) return;
+    const kind = b.dataset.sym;
+    tool = kind;
+    const n = (doc.shapes || []).length;
+    const x = 0.16 + (n % 5) * 0.16;
+    const y = 0.22 + Math.floor(n / 5) * 0.2;
+    const jx = 0;
+    const jy = 0;
+    if (kind === 'arrow') {
+      const span = arrowSpan(view.iw || 1000, view.ih || 1400);
+      let x2 = x + jx + span.dx;
+      const y2 = y + jy;
+      if (x2 > 0.96) x2 = x + jx - span.dx;
+      await commit(addShape(doc, { kind: 'arrow', x: x + jx, y, x2, y2, color: lineColor, dash: false }));
+    } else {
+      await commit(addShape(doc, symbolAt(kind, x + jx, y + jy)));
+    }
+    clearPick();
+    selectedShape = doc.shapes?.[doc.shapes.length - 1]?.id || null;
+    paint();
+  });
   el.querySelector('#draw-area').onclick = () => { tool = 'area'; paint(); };
+  async function loescheAuswahl() {
+    if (selectedDim) { const id = selectedDim; selectedDim = null; await commit(deleteDim(doc, id)); return; }
+    if (selectedMarker) { const id = selectedMarker; selectedMarker = null; await commit(deleteMarker(doc, id)); return; }
+    if (selectedStroke) { const id = selectedStroke; selectedStroke = null; await commit(deleteStroke(doc, id)); return; }
+    if (selectedText) { const id = selectedText; selectedText = null; detail = null; await commit(deleteText(doc, id)); return; }
+    if (selectedShape) { const id = selectedShape; selectedShape = null; detail = null; await commit(deleteShape(doc, id)); return; }
+    if (selectedEdge) { const id = selectedEdge; selectedEdge = null; detail = null; selectedNode = null; await commit(deleteEdge(doc, id)); await refreshArea(); }
+  }
+  el.querySelector('#draw-delete').onclick = () => loescheAuswahl();
+  el.querySelector('#draw-snap').onclick = () => {
+    snapOn = !snapOn;
+    try { localStorage.setItem('baudoku-snap', snapOn ? '1' : '0'); } catch { /* bleibt für diese Sitzung */ }
+    msg = snapOn ? 'Einrasten an: gerade, 90° und 45°.' : 'Einrasten aus.';
+    paint();
+  };
   el.querySelector('#draw-undo').onclick = async () => {
     if (!undo.length) return;
+    redo.push(clone(doc));
     doc = undo.pop();
-      selectedEdge = null;
-      selectedNode = null;
-      selectedText = null;
-      selectedShape = null;
-      detail = null;
-      ann = [];
+    clearPick();
+    ann = [];
+    await persist();
+    await refreshArea();
+  };
+  el.querySelector('#draw-redo').onclick = async () => {
+    if (!redo.length) return;
+    undo.push(clone(doc));
+    doc = redo.pop();
+    clearPick();
+    ann = [];
     await persist();
     await refreshArea();
   };
@@ -1426,6 +1880,9 @@ export function mountDraw(root, { photo, sheet, sketch, img, onBack }) {
     edges: () => doc.edges.length,
     edgeEnds: () => doc.edges.map((e) => { const a = nodeById(doc, e.a), b = nodeById(doc, e.b); const look = edgeLook(e); return { label: e.label, name: e.name || '', title: edgeTitle(e), measureText: namedMeasure(e), x1: a?.x, y1: a?.y, x2: b?.x, y2: b?.y, free: !!e.free, m: e.measure ? e.measure.value : null, unit: e.measure?.unit || null, color: look.color, dash: look.dash }; }),
     shapes: () => (doc.shapes || []).map((s) => ({ kind: s.kind, x: s.x, y: s.y, x2: s.x2, y2: s.y2, text: s.text || '', side: s.side === -1 ? -1 : 1, w: s.w, h: s.h, d: s.d, color: s.color, dash: !!s.dash, symbol: !!s.symbol })),
+    dims: () => (doc.dims || []).map((d) => ({ ...d, text: dimCaption(d) })),
+    markers: () => (doc.markers || []).map((m) => ({ ...m })),
+    scaleOn: () => !!doc.scale,
     arrowLabels() {
       const z = userZoom || 1;
       const X = (nx) => view.ox + nx * view.iw * view.s;

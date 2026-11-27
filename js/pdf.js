@@ -25,6 +25,19 @@ function markupFuer(p, photos) {
   if (p?.markup?.exportId && (photos || []).some((o) => o.id === p.markup.exportId)) return null;
   return p?.markup;
 }
+function markerListe(p, photos) {
+  const own = p?.markup?.doc?.markers || [];
+  if (p?.source === 'drawing' && p.sourcePhotoId) {
+    const src = (photos || []).find((x) => x.id === p.sourcePhotoId);
+    const fromSrc = src?.markup?.doc?.markers || [];
+    if (fromSrc.length) return fromSrc;
+  }
+  if (own.length && p?.markup?.exportId && (photos || []).some((o) => o.id === p.markup.exportId)) return [];
+  return own;
+}
+function notizAmFoto(notes, photoId) {
+  return (notes || []).filter((n) => n.photoId === photoId).sort((a, b) => (a.created || 0) - (b.created || 0));
+}
 async function jpeg(blob, max = 1600, q = 0.82, markup) {
   const img = await loadImg(blob);
   try {
@@ -86,24 +99,43 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
       const meta = [`Nr. ${i + 1}`, fmtDateTime(p.time, true), p.lat != null ? `GPS ${fmtCoord(p.lat, p.lon)}${p.acc != null ? ` (±${fmtNum(p.acc, 0)} m)` : ''}` : 'GPS: –', p.address].filter(Boolean).join('  ·  ');
       doc.setFontSize(9); const metaL = doc.splitTextToSize(meta, CW);
       doc.setFontSize(10.5); const capL = p.caption ? doc.splitTextToSize(p.caption, CW) : [];
-      const textH = metaL.length * 3.9 + capL.length * 4.6 + 3;
-      if (y + slotH > PH - 16) { newPage(); }
+      const linked = opts.includeNotes ? notizAmFoto(notes, p.id) : [];
+      const markers = [...markerListe(p, photos)].sort((a, b) => (a.n || 0) - (b.n || 0));
+      doc.setFontSize(10);
+      const noteLines = linked.flatMap((n) => doc.splitTextToSize(String(n.text || ''), CW - 4).map((l, idx) => (idx === 0 ? `Notiz: ${l}` : l)));
+      const markLines = markers.flatMap((m) => doc.splitTextToSize(`${m.n}. ${m.note || ''}`.trim(), CW - 4));
+      const extraH = (noteLines.length + markLines.length + (markLines.length ? 1 : 0)) * 4.4;
+      const textH = metaL.length * 3.9 + capL.length * 4.6 + extraH + 3;
+      const block = Math.max(slotH, textH + 42);
+      if (y > 40 && y + Math.min(block, PH - 40) > PH - 16) newPage();
+      const room = PH - 16 - y;
       const j = await jpeg(opts.stamped ? (p.stamped || p.original) : p.original, 1600, 0.82, markupFuer(p, photos));
-      const imgMaxH = slotH - textH; let w = CW, h = w * j.h / j.w; if (h > imgMaxH) { h = imgMaxH; w = h * j.w / j.h; }
+      const imgMaxH = Math.max(36, Math.min(slotH - 8, room - textH - 4));
+      let w = CW, h = w * j.h / j.w; if (h > imgMaxH) { h = imgMaxH; w = h * j.w / j.h; }
       doc.addImage(j.data, 'JPEG', M + (CW - w) / 2, y, w, h); doc.setDrawColor(200); doc.setLineWidth(0.2); doc.rect(M + (CW - w) / 2, y, w, h);
       let ty = y + h + 4.5;
       if (capL.length) { doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(20, 24, 29); capL.forEach(l => { doc.text(l, M, ty); ty += 4.6; }); }
       doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...GREY); metaL.forEach(l => { doc.text(l, M, ty); ty += 3.9; });
-      y += slotH + 4;
+      if (markLines.length || noteLines.length) {
+        doc.setTextColor(20, 24, 29); doc.setFontSize(10);
+        if (markLines.length) {
+          doc.setFont('helvetica', 'bold'); doc.text('Marker', M, ty); ty += 4.4;
+          doc.setFont('helvetica', 'normal');
+          markLines.forEach(l => { doc.text(l, M + 2, ty); ty += 4.4; });
+        }
+        noteLines.forEach(l => { doc.text(l, M, ty); ty += 4.4; });
+      }
+      y = Math.max(y + slotH + 4, ty + 4);
     }
   }
 
   /* Notizen */
-  if (opts.includeNotes && notes.length) {
+  const loseNotizen = opts.includePhotos ? notes.filter((n) => !(n.photoId && photoNo.has(n.photoId))) : notes;
+  if (opts.includeNotes && loseNotizen.length) {
     newPage(); h1('Notizen');
-    [...notes].sort((a, b) => a.created - b.created).forEach(n => {
+    [...loseNotizen].sort((a, b) => a.created - b.created).forEach(n => {
       need(14);
-      const ref = n.photoId && photoNo.has(n.photoId) ? `  ·  zu Foto Nr. ${photoNo.get(n.photoId)}` : '';
+      const ref = !opts.includePhotos && n.photoId && photoNo.has(n.photoId) ? `  ·  zu Foto Nr. ${photoNo.get(n.photoId)}` : '';
       txt(fmtDateTime(n.created) + ref, 9.5, 'bold', GREY); txt(n.text, 10.5); y += 2.5;
       doc.setDrawColor(225, 228, 232); doc.setLineWidth(0.2); doc.line(M, y - 2, M + CW, y - 2);
     });
