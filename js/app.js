@@ -3,7 +3,7 @@ import * as db from './db.js';
 import { $, $$, esc, uid, fmtDate, fmtDateTime, fmtNum, fmtCoord, fmtBytes, isoDate, parseNum, toast, modal, confirmDlg, loadImg, canvasToBlob, downloadBlob, shareOrDownload, shareOrDownloadMany, safeName, HEADER_COLORS } from './util.js';
 import { startGeo, stopGeo, getFix, onGeo, geoState, reverseGeocode, processImage, liveCamera } from './media.js';
 import { readExif } from './exif.js';
-import { emptyMeasure, measureValue } from './geom.js';
+import { emptyMeasure, measureValue, planeSummary } from './geom.js';
 import { mountEditor, rectify, fmtVal } from './measure.js';
 import { buildPdf } from './pdf.js';
 import { exportZip, importFile } from './backup.js';
@@ -12,7 +12,7 @@ import { mountDraw } from './draw.js';
 import { sketchProposals, importLegacyStrokes, importLegacySketch, legacyStrokes, cloneSketchDoc, partSummary } from './plan.js';
 import { sumSelected, formatCalcText } from './sketch-calc.js';
 
-const APP_VERSION = 'baudoku-v1.7.13';
+const APP_VERSION = 'baudoku-v1.7.14';
 const APP = $('#app');
 const DEFAULTS = { firma: '', bearbeiter: '', geocode: true, stampFirma: true, pdfStamped: true, header: 'blue' };
 function applyHeader(id) {
@@ -42,7 +42,7 @@ async function route() {
     if (parts[0] === 'p' && parts[2] === 'edit') return await viewEditProject(parts[1]);
     if (parts[0] === 'p') return await viewProject(parts[1], q.get('tab') || 'photos', q);
     if (parts[0] === 'photo') return await viewPhoto(parts[1]);
-    if (parts[0] === 'measure') return await viewMeasure(parts[1]);
+    if (parts[0] === 'measure') return await viewMeasure(parts[1], q);
     if (parts[0] === 'sketch') return await viewSketch(parts[1]);
     if (parts[0] === 'draw') return await viewDraw(parts[1]);
     if (parts[0] === 'sheet') return await viewSheet(parts[1]);
@@ -345,7 +345,7 @@ async function viewProject(pid, tab, q) {
       <div class="l2"><input class="inp" data-k="menge" inputmode="decimal" value="${esc(r.expr ?? (r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : ''))}" placeholder="Menge (z. B. 12,5*2)" aria-label="Menge">
       <input class="inp" data-k="einheit" list="units" value="${esc(r.einheit)}" placeholder="Einheit" aria-label="Einheit">
       <button class="ib" data-mv="-1" aria-label="nach oben">↑</button><button class="ib" data-mv="1" aria-label="nach unten">↓</button><button class="ib" data-del aria-label="Löschen">🗑</button></div>
-      <div class="src">= <b data-res>${r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : '–'}</b> ${esc(r.einheit || '')}${ph ? ` · aus <a href="#/measure/${ph.id}">Foto ${no.get(ph.id)}${it ? ' – ' + esc(it.name) : ''}</a>${r.manual ? ' (manuell geändert)' : ''}` : ''}${r.sketchId ? ` · <a href="#/sketch/${r.sketchId}">Skizze${r.calc?.faceLabel ? ' ' + esc(r.calc.faceLabel) : ''}</a>` : ''}${String(r.einheit || '').trim() === 'm²' && r.menge != null && r.menge !== '' && isFinite(+r.menge) ? ` · <label class="chk" style="display:inline-flex;min-height:0"><input type="checkbox" data-pick value="${esc(r.id)}"> zur Auswahl</label>` : ''}</div>
+      <div class="src">= <b data-res>${r.menge != null && r.menge !== '' ? fmtNum(r.menge, 2) : '–'}</b> ${esc(r.einheit || '')}${ph ? ` · aus <a href="#/measure/${ph.id}">Foto ${no.get(ph.id)}${it ? ' – ' + esc(it.name) : ''}</a>${r.ca ? ' · ca.' : ''}${r.manual ? ' (manuell geändert)' : ''}` : ''}${r.sketchId ? ` · <a href="#/sketch/${r.sketchId}">Skizze${r.calc?.faceLabel ? ' ' + esc(r.calc.faceLabel) : ''}</a>` : ''}${String(r.einheit || '').trim() === 'm²' && r.menge != null && r.menge !== '' && isFinite(+r.menge) ? ` · <label class="chk" style="display:inline-flex;min-height:0"><input type="checkbox" data-pick value="${esc(r.id)}"> zur Auswahl</label>` : ''}</div>
       ${r.calc ? `<pre class="calc">${esc(formatCalcText({ pos: r.pos, name: r.bez, calc: r.calc }))}</pre>` : ''}</div>`; };
     const sums = partSummary(am);
     const sumHtml = sums.length ? `<section class="part-sum"><h3>Zusammenfassung nach Bauteil</h3>${sums.map((s) => `<p>${esc(s.text)}</p>`).join('')}</section>` : '';
@@ -468,6 +468,17 @@ async function syncAm(ph) {
     if (r.menge !== nv || r.bez !== it.name) { r.menge = nv; r.expr = fmtNum(nv, 2); r.bez = it.name; r.einheit = v.unit; await db.put('aufmass', r); }
   }
 }
+async function syncPlane(ph) {
+  const id = ph.measure?.planeAufmassId;
+  if (!id) return;
+  const r = await db.get('aufmass', id);
+  if (!r || r.manual) return;
+  const s = planeSummary(ph.measure);
+  if (!s) return;
+  const nv = Math.round(s.net * 100) / 100;
+  const expr = fmtNum(nv, 2);
+  if (r.menge !== nv || r.expr !== expr) { r.menge = nv; r.expr = expr; r.einheit = 'm²'; r.ca = true; r.herkunft = r.herkunft || 'foto'; await db.put('aufmass', r); }
+}
 
 /* ---------- Foto-Detail ---------- */
 async function viewPhoto(id) {
@@ -484,7 +495,8 @@ async function viewPhoto(id) {
     <button class="btn primary block" id="drawOpen" style="margin-top:8px">✎ Zeichnen${ph.markup?.strokes?.length ? ` (${ph.markup.strokes.length})` : ''}</button>
     <div class="row" style="margin:8px 0"><button class="btn sm" data-v="stamped">Mit Stempel</button><button class="btn sm" data-v="original">Original</button></div>
     <label class="f">Bildbeschreibung<textarea class="inp" id="cap" style="min-height:70px" placeholder="z. B. Kehle Nordseite, Ziegel gebrochen">${esc(ph.caption)}</textarea></label>
-    <div class="grid2"><button class="btn primary" data-nav="#/measure/${id}">📐 Aufmaß${items.length ? ` (${items.length})` : ''}</button><button class="btn" data-nav="#/p/${ph.projectId}?tab=notes&photo=${id}">📝 Notiz</button></div>
+    <button class="btn primary block" id="bPlane" data-nav="#/measure/${id}?tool=persp" style="min-height:54px">Fläche messen</button>
+    <div class="grid2" style="margin-top:8px"><button class="btn primary" data-nav="#/measure/${id}">📐 Aufmaß${items.length ? ` (${items.length})` : ''}</button><button class="btn" data-nav="#/p/${ph.projectId}?tab=notes&photo=${id}">📝 Notiz</button></div>
     <div class="card" style="margin-top:10px"><div class="kv"><b>Aufnahme</b><span>${fmtDateTime(ph.time, true)}${ph.timeKind === 'import' ? ' (Importzeit)' : ph.timeKind === 'exif' ? ' (Bilddatum)' : ph.source === 'gallery' ? ' (aus Galerie)' : ''}</span>
       <b>GPS</b><span>${ph.lat != null ? `<a href="https://www.openstreetmap.org/?mlat=${ph.lat}&mlon=${ph.lon}#map=19/${ph.lat}/${ph.lon}" target="_blank" rel="noopener">${fmtCoord(ph.lat, ph.lon)}</a>${ph.acc != null ? ` ±${fmtNum(ph.acc, 0)} m` : ''}` : 'nicht verfügbar'}</span>
       <b>Adresse</b><span>${esc(ph.address || '–')}</span><b>Größe</b><span>${ph.width} × ${ph.height} px</span></div></div>
@@ -512,14 +524,32 @@ async function viewPhoto(id) {
 }
 
 /* ---------- Aufmaß-Editor ---------- */
-async function viewMeasure(id) {
+async function viewMeasure(id, q) {
   const ph = await db.get('photos', id); if (!ph) return go('#/');
   const img = await loadImg(ph.original); cleanup.push(() => URL.revokeObjectURL(img._url));
   APP.innerHTML = '<div id="me"></div>';
   const ed = mountEditor($('#me'), {
-    img, measure: ph.measure || emptyMeasure(), title: ph.caption || fmtDateTime(ph.time),
-    onChange: async m => { const cur = await db.get('photos', id); if (!cur) return; cur.measure = m; await db.put('photos', cur); await syncAm(cur); },
+    img, measure: ph.measure || emptyMeasure(), title: ph.caption || fmtDateTime(ph.time), startTool: q?.get('tool') || '',
+    onChange: async m => { const cur = await db.get('photos', id); if (!cur) return; cur.measure = m; await db.put('photos', cur); await syncAm(cur); await syncPlane(cur); },
     onToAufmass: async (it, v) => { const cur = await db.get('photos', id); return upsertAm(cur, it, v); },
+    onToPlane: async (info) => {
+      const cur = await db.get('photos', id);
+      let row = cur.measure?.planeAufmassId && await db.get('aufmass', cur.measure.planeAufmassId);
+      if (!row || row.manual) {
+        const all = await db.byProject('aufmass', cur.projectId);
+        row = { id: uid(), projectId: cur.projectId, order: Date.now(), pos: String(all.length + 1).padStart(2, '0'), photoId: cur.id };
+      }
+      row.bez = info.bez;
+      row.menge = Math.round(info.net * 100) / 100;
+      row.expr = fmtNum(row.menge, 2);
+      row.einheit = 'm²';
+      row.manual = false;
+      row.herkunft = 'foto';
+      row.ca = true;
+      row.photoId = cur.id;
+      await db.put('aufmass', row);
+      return row.id;
+    },
     onRectify: async m => {
       toast('Draufsicht wird berechnet …', 8000);
       await new Promise(r => setTimeout(r, 30));

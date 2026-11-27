@@ -125,8 +125,13 @@ input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
 .me .hdr{position:relative}
 .me canvas{flex:1;width:100%;min-height:0;touch-action:none;display:block;cursor:crosshair}
 .me .hint{background:#000;color:var(--yellow);padding:8px 12px;font-size:.9rem;min-height:38px}
-.me .tools{display:grid;grid-template-columns:repeat(5,1fr);gap:4px;padding:6px 6px calc(6px + var(--safe-b));background:#1f2933}
-.me .tools button{min-height:58px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-size:.72rem;font-weight:650;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer}
+.me .tools{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;padding:6px 6px calc(6px + var(--safe-b));background:#1f2933}
+.me .tools button{min-height:54px;border:0;border-radius:12px;background:#2f3b47;color:#fff;font-size:.78rem;font-weight:700;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;cursor:pointer}
+.plane{background:#1a1208;color:#fff;padding:8px 10px;max-height:32vh;overflow:auto}
+.plane .row{display:flex;gap:6px;margin-top:6px}
+.plane .btn{min-height:54px;flex:1}
+.plane-warn{background:#c92a2a;color:#fff;border-radius:10px;padding:8px 10px;font-weight:800}
+.plane .mi.net{font-weight:800}
 .me .tools button span{font-size:1.25rem}
 .me .tools button.on{background:var(--accent)}
 .me .ctx{display:flex;gap:6px;padding:6px;background:#1f2933;flex-wrap:wrap;min-height:62px;align-content:center}

@@ -1,8 +1,8 @@
 // Foto-Aufmaß-Editor: Maßstab, 4-Punkt-Perspektive, Längen (Polylinien), Flächen (Polygone)
-import { dist, centroid, realMapper, measureValue, orderQuad, homography, applyH, invert3, hW, emptyMeasure } from './geom.js';
+import { dist, centroid, realMapper, measureValue, orderQuad, homography, applyH, invert3, hW, emptyMeasure, estimateRectangle, planeSummary, PLANE_HINT, PLANE_ONE } from './geom.js';
 import { fmtNum, modal, parseNum, toast, esc, uid, confirmDlg } from './util.js';
 
-const COL = { line: '#ff7a1a', area: '#40c057', scale: '#ffd43b', persp: '#22b8cf', sel: '#ffffff' };
+const COL = { line: '#ff7a1a', area: '#40c057', deduct: '#e03131', scale: '#ffd43b', persp: '#22b8cf', sel: '#ffffff' };
 export function fmtVal(v) { return v ? `${fmtNum(v.value, 2)} ${v.unit}` : 'nicht kalibriert'; }
 
 /* ---------- Zeichnen (Bildschirm und Export gemeinsam) ---------- */
@@ -41,7 +41,7 @@ export function drawOverlay(ctx, m, T, o) {
   }
   // Messungen
   m.items.forEach((it, idx) => {
-    const sel = o.selected === it.id; const c = COL[it.type];
+    const sel = o.selected === it.id; const c = it.abzug ? COL.deduct : COL[it.type];
     if (it.type === 'area' && it.pts.length >= 3) { path(ctx, it.pts, T, true); ctx.fillStyle = sel ? 'rgba(64,192,87,.38)' : 'rgba(64,192,87,.22)'; ctx.fill(); }
     path(ctx, it.pts, T, it.type === 'area');
     ctx.strokeStyle = '#000'; ctx.lineWidth = lw + 2.5; ctx.stroke();
@@ -56,13 +56,14 @@ export function drawOverlay(ctx, m, T, o) {
   const d = o.draft;
   if (d && d.pts.length) {
     const c = COL[d.type] || '#fff';
-    if (d.type === 'area' && d.pts.length >= 3) { path(ctx, d.pts, T, true); ctx.fillStyle = 'rgba(64,192,87,.25)'; ctx.fill(); }
-    path(ctx, d.pts, T, d.type === 'area' || (d.type === 'persp' && d.pts.length === 4));
+    const geschlossen = d.type === 'area' || d.type === 'deduct' || (d.type === 'persp' && d.pts.length === 4);
+    if ((d.type === 'area' || d.type === 'deduct') && d.pts.length >= 3) { path(ctx, d.pts, T, true); ctx.fillStyle = d.type === 'deduct' ? 'rgba(224,49,49,.25)' : 'rgba(64,192,87,.25)'; ctx.fill(); }
+    path(ctx, d.pts, T, geschlossen);
     ctx.strokeStyle = '#000'; ctx.lineWidth = lw + 2.5; ctx.stroke(); ctx.strokeStyle = c; ctx.lineWidth = lw; ctx.stroke();
     dots(ctx, d.pts, T, pr, c);
     if (d.type === 'persp') d.pts.forEach((q, i) => { const [x, y] = T(q); ctx.fillStyle = '#000'; ctx.font = `700 ${fs * .7}px system-ui`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(String(i + 1), x, y); });
     if ((d.type === 'line' || d.type === 'area') && mapper) {
-      const v = measureValue(m, { type: d.type, pts: d.pts, usePitch: d.type === 'area' && m.mode === 'scale' }, mapper);
+      const v = measureValue(m, { type: d.type === 'deduct' ? 'area' : d.type, pts: d.pts, usePitch: d.type === 'area' && m.mode === 'scale' }, mapper);
       if (v) { const [x, y] = T(d.pts[d.pts.length - 1]); label(ctx, x, y - fs * 1.8, fmtNum(v.value, 2) + ' ' + v.unit, c, fs); }
     }
   }
@@ -120,24 +121,26 @@ export function rectify(img, m, maxPx = 1800) {
 }
 
 /* ---------- Interaktiver Editor ---------- */
-export function mountEditor(root, { img, measure, title, onChange, onToAufmass, onRectify, onBack }) {
+export function mountEditor(root, { img, measure, title, onChange, onToAufmass, onToPlane, onRectify, onBack, startTool }) {
   const m = measure ? JSON.parse(JSON.stringify(measure)) : emptyMeasure();
   m.items = m.items || [];
-  let tool = m.mode === 'none' ? 'scale' : 'select', draft = null, selected = null;
+  let tool = m.mode === 'none' ? (startTool === 'persp' ? 'persp' : 'scale') : 'select', draft = null, selected = null;
   const view = { k: 1, tx: 0, ty: 0 }; let dpr = window.devicePixelRatio || 1;
   root.innerHTML = `<div class="me">
-    <div class="hdr"><button class="ib" data-a="back" aria-label="Zurück">←</button><h1>Aufmaß<span class="sub">${esc(title || '')}</span></h1>
+    <div class="hdr"><button class="ib" data-a="back" aria-label="Zurück">←</button><h1>${startTool === 'persp' ? 'Fläche messen' : 'Aufmaß'}<span class="sub">${esc(title || '')}</span></h1>
       <button class="ib" data-a="list" aria-label="Liste">☰</button><button class="ib" data-a="menu" aria-label="Menü">⋯</button></div>
     <div class="status"></div>
+    <div class="plane" id="planeBox" hidden></div>
     <div class="hint"></div>
     <canvas></canvas>
     <div class="ctx"></div>
     <div class="tools">
       <button data-t="select"><span>✋</span>Auswahl</button>
       <button data-t="scale"><span>📏</span>Maßstab</button>
-      <button data-t="persp"><span>⬚</span>Perspektive</button>
-      <button data-t="line"><span>〰</span>Länge</button>
+      <button data-t="persp"><span>⬚</span>Referenz</button>
+      <button data-t="line"><span>↔</span>Strecke</button>
       <button data-t="area"><span>▱</span>Fläche</button>
+      <button data-t="deduct"><span>▭</span>Abzug</button>
     </div></div>`;
   const cv = root.querySelector('canvas'), ctx = cv.getContext('2d');
   const $hint = root.querySelector('.hint'), $ctx = root.querySelector('.ctx'), $status = root.querySelector('.status');
@@ -157,7 +160,7 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     drawOverlay(ctx, m, toS, { fs: 14, lw: 3, pr: 9, selected, draft, tool, editable: true, showAllRefs: false });
     if (loupe) {
-      const R = 62, Z = 3, [px, py] = toS(loupe); const cx = px < 160 && py < 180 ? cv.clientWidth - R - 12 : R + 12, cy = R + 12;
+      const R = 78, Z = 3.4, [px, py] = toS(loupe); const cx = px < 180 && py < 200 ? cv.clientWidth - R - 12 : R + 12, cy = R + 12;
       ctx.save(); ctx.beginPath(); ctx.arc(cx, cy, R, 0, 7); ctx.clip(); ctx.fillStyle = '#000'; ctx.fillRect(cx - R, cy - R, 2 * R, 2 * R);
       const k = view.k * Z; ctx.setTransform(dpr * k, 0, 0, dpr * k, dpr * (cx - loupe[0] * k), dpr * (cy - loupe[1] * k)); ctx.drawImage(img, 0, 0);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -167,11 +170,12 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     }
   }
   const HINTS = {
-    select: 'Punkte ziehen zum Korrigieren · Messung antippen zum Bearbeiten · 2 Finger: Zoom/Verschieben',
+    select: 'Ecken mit dem Finger ziehen, die Lupe setzt sie fein. Zwei Finger zoomen und verschieben.',
     scale: 'Maßstab: Anfang und Ende einer bekannten Strecke antippen (z. B. Zollstock, Dachfenster, Ziegelreihe)',
-    persp: 'Perspektive: 4 Ecken eines bekannten Rechtecks antippen (z. B. Dachfenster, Tür, Plattenformat) – Reihenfolge egal',
-    line: 'Länge: Punkte nacheinander antippen, dann „Fertig“',
-    area: 'Fläche: Eckpunkte nacheinander antippen, dann „Fertig“',
+    persp: 'Vier Ecken einer ebenen rechteckigen Fläche antippen. Danach mit der Lupe fein verschieben. ' + PLANE_HINT,
+    line: 'Strecke: Punkte nacheinander antippen, dann „Fertig“',
+    area: 'Fläche: Eckpunkte der Fläche antippen, dann „Fertig“',
+    deduct: 'Abzug: Fenster oder Gaube als Polygon antippen, dann „Fertig“',
   };
   function calibText() {
     if (m.mode === 'persp' && m.persp) return `<span class="pill ok">Perspektive ${fmtNum(m.persp.w, 2)} × ${fmtNum(m.persp.h, 2)} m</span>`;
@@ -181,13 +185,29 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
   function ui() {
     root.querySelectorAll('.tools button').forEach(b => b.classList.toggle('on', b.dataset.t === tool));
     $hint.textContent = HINTS[tool];
+    const plane = root.querySelector('#planeBox');
+    const sum = planeSummary(m);
+    if (plane) {
+      if (m.mode === 'persp' && m.persp) {
+        plane.hidden = false;
+        const zeilen = [];
+        if (sum) {
+          for (const r of sum.lengths) zeilen.push(`<div class="mi"><span class="n">${esc(r.name)}</span><span class="v">ca. ${fmtNum(r.value, 2)} m</span></div>`);
+          for (const r of sum.areas) zeilen.push(`<div class="mi"><span class="n">${esc(r.name)}</span><span class="v">ca. ${fmtNum(r.value, 2)} m²</span></div>`);
+          for (const r of sum.deductions) zeilen.push(`<div class="mi"><span class="n">Abzug ${esc(r.name)}</span><span class="v">ca. ${fmtNum(r.value, 2)} m²</span></div>`);
+          if (sum.areas.length || sum.deductions.length) zeilen.push(`<div class="mi net"><span class="n">Netto</span><span class="v">ca. ${fmtNum(sum.net, 2)} m²</span></div>`);
+        }
+        plane.innerHTML = `<b>Fläche messen</b><p class="small">Referenz ca. ${fmtNum(m.persp.w, 2)} × ${fmtNum(m.persp.h, 2)} m</p>${m.persp.accuracy === 'one' ? `<p class="plane-warn">${PLANE_ONE}</p>` : ''}<div class="mlist">${zeilen.join('')}</div><p class="small">${PLANE_HINT}</p><div class="row"><button type="button" class="btn primary" data-a="takeNet">Ins Aufmaß übernehmen</button><button type="button" class="btn" data-a="rect">Draufsicht</button></div>`;
+      } else { plane.hidden = true; plane.innerHTML = ''; }
+    }
     $status.innerHTML = `${calibText()}<span class="pill" data-a="pitch" role="button">Neigung ${m.pitch ? fmtNum(m.pitch, 0) + '°' : '–'}</span><span class="pill">${m.items.length} Messung${m.items.length === 1 ? '' : 'en'}</span>`;
     let h = '';
     if (draft && draft.pts.length) {
       h += `<button class="btn" data-a="undo">↶ Punkt</button><button class="btn" data-a="cancel">✕ Abbrechen</button>`;
-      if (draft.type === 'line' || draft.type === 'area') {
-        const v = measureValue(m, { type: draft.type, pts: draft.pts, usePitch: draft.type === 'area' && m.mode === 'scale' });
-        h += `<button class="btn primary" data-a="finish" ${draft.pts.length < (draft.type === 'line' ? 2 : 3) ? 'disabled' : ''}>✓ Fertig${v ? ' · ' + fmtNum(v.value, 2) + ' ' + v.unit : ''}</button>`;
+      if (draft.type === 'line' || draft.type === 'area' || draft.type === 'deduct') {
+        const v = measureValue(m, { type: draft.type === 'line' ? 'line' : 'area', pts: draft.pts, usePitch: draft.type === 'area' && m.mode === 'scale' });
+        const ca = m.mode === 'persp' ? 'ca. ' : '';
+        h += `<button class="btn primary" data-a="finish" ${draft.pts.length < (draft.type === 'line' ? 2 : 3) ? 'disabled' : ''}>✓ Fertig${v ? ' · ' + ca + fmtNum(v.value, 2) + ' ' + v.unit : ''}</button>`;
       }
     } else if (selected) {
       const it = m.items.find(i => i.id === selected);
@@ -295,22 +315,43 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     m.mode = 'scale'; changed(); setTool('select'); toast(`Maßstab gesetzt: ${fmtNum(len, 2)} m`);
   }
   async function askPersp(pre) {
-    const r = await modal({ title: 'Referenz-Rechteck', html: '<p class="small">Ecken: 1 oben links → 2 oben rechts → 3 unten rechts → 4 unten links. Reale Maße:</p>',
-      fields: [{ name: 'w', label: 'Breite 1→2 (m)', inputmode: 'decimal', value: pre ? fmtNum(pre.w, 2) : '' }, { name: 'h', label: 'Höhe 2→3 (m)', inputmode: 'decimal', value: pre ? fmtNum(pre.h, 2) : '' }],
+    const r = await modal({ title: 'Referenzfläche', html: `<p class="small">Breite, Höhe oder beides. Ein Maß genügt, zwei Maße sind genauer.</p><p class="small">${PLANE_HINT}</p>`,
+      fields: [
+        { name: 'w', label: 'Breite (m)', inputmode: 'decimal', value: pre && pre.givenW !== false ? fmtNum(pre.w, 2) : '', placeholder: 'z. B. 4,20' },
+        { name: 'h', label: 'Höhe (m)', inputmode: 'decimal', value: pre && pre.givenH !== false ? fmtNum(pre.h, 2) : '', placeholder: 'optional' },
+      ],
       buttons: [{ label: 'Abbrechen', value: null }, { label: 'Übernehmen', value: 'ok', cls: 'primary' }] });
-    const w = r && parseNum(r.w), h = r && parseNum(r.h);
-    if (!(w > 0 && h > 0)) { if (r) toast('Bitte Breite und Höhe eingeben'); if (!pre) draft.pts = []; ui(); return; }
-    if (draft && draft.type === 'persp') m.persp = { pts: draft.pts, w, h }; else if (m.persp) { m.persp.w = w; m.persp.h = h; }
-    m.mode = 'persp'; changed(); setTool('select'); toast(m.pitch ? 'Perspektive kalibriert – Neigung wird bei neuen Flächen nicht angewendet (Referenz liegt in der Dachebene)' : 'Perspektive kalibriert', 4000);
+    if (!r) { if (!pre && draft) draft.pts = []; ui(); return; }
+    const w = String(r.w || '').trim() ? parseNum(r.w) : 0;
+    const h = String(r.h || '').trim() ? parseNum(r.h) : 0;
+    if (!(w > 0) && !(h > 0)) { toast('Bitte mindestens ein Maß eingeben'); if (!pre && draft) draft.pts = []; ui(); return; }
+    const pts = draft && draft.type === 'persp' && draft.pts.length === 4 ? draft.pts : m.persp?.pts;
+    if (!pts || pts.length !== 4) { ui(); return; }
+    let next;
+    if (w > 0 && h > 0) next = { pts, w, h, givenW: true, givenH: true, accuracy: 'two', method: 'both' };
+    else {
+      const est = estimateRectangle(pts, { width: w, height: h }, { w: img.naturalWidth, h: img.naturalHeight });
+      if (!est) { toast('Bitte beide Maße eintragen'); ui(); return; }
+      next = { pts, w: est.w, h: est.h, givenW: w > 0, givenH: h > 0, accuracy: 'one', method: est.method };
+    }
+    m.persp = next;
+    m.mode = 'persp';
+    changed();
+    setTool('select');
+    toast(next.accuracy === 'one' ? PLANE_ONE : 'Referenz gesetzt', 4000);
   }
   async function finishDraft() {
-    const type = draft.type, n = m.items.filter(i => i.type === type).length + 1;
-    const def = (type === 'line' ? 'Länge ' : 'Fläche ') + n;
-    const r = await modal({ title: type === 'line' ? 'Länge speichern' : 'Fläche speichern', fields: [{ name: 'name', label: 'Bezeichnung', value: def, placeholder: 'z. B. Traufe, Dachfläche Süd' }],
-      html: `<p><b>${fmtVal(measureValue(m, { type, pts: draft.pts, usePitch: type === 'area' && m.mode === 'scale' }))}</b></p>`, buttons: [{ label: 'Zurück', value: null }, { label: 'Speichern', value: 'ok', cls: 'primary' }] });
+    const werkzeug = draft.type;
+    const type = werkzeug === 'deduct' ? 'area' : werkzeug;
+    const n = m.items.filter(i => i.type === type && !!i.abzug === (draft.type === 'deduct')).length + 1;
+    const def = (werkzeug === 'deduct' ? 'Abzug ' : type === 'line' ? 'Strecke ' : 'Fläche ') + n;
+    const wert = measureValue(m, { type, pts: draft.pts, usePitch: type === 'area' && m.mode === 'scale' && werkzeug !== 'deduct' });
+    const r = await modal({ title: werkzeug === 'deduct' ? 'Abzug speichern' : type === 'line' ? 'Strecke speichern' : 'Fläche speichern', fields: [{ name: 'name', label: 'Bezeichnung', value: def, placeholder: 'z. B. Traufe, Dachfläche Süd' }],
+      html: `<p><b>${m.mode === 'persp' && wert ? 'ca. ' : ''}${fmtVal(wert)}</b></p>`, buttons: [{ label: 'Zurück', value: null }, { label: 'Speichern', value: 'ok', cls: 'primary' }] });
     if (!r) return;
-    const it = { id: uid(), type, name: r.name.trim() || def, pts: draft.pts, usePitch: type === 'area' && m.pitch > 0 && m.mode === 'scale', aufmassId: null };
-    m.items.push(it); draft = { type, pts: [] }; changed(); ui();
+    const it = { id: uid(), type, name: r.name.trim() || def, pts: draft.pts, usePitch: type === 'area' && m.pitch > 0 && m.mode === 'scale' && draft.type !== 'deduct', aufmassId: null };
+    if (werkzeug === 'deduct') it.abzug = true;
+    m.items.push(it); draft = { type: werkzeug, pts: [] }; changed(); ui();
     if (!realMapper(m)) toast('Gespeichert – noch kein Maßstab gesetzt');
   }
   async function editPitch() {
@@ -327,6 +368,16 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     const r = await modal({ title: 'Messungen', html: `<div class="mlist">${rows}</div>`, buttons: [{ label: 'Schließen', value: null }, { label: 'Alle → Aufmaß', value: 'all', cls: 'primary' }] });
     if (r === 'all') { for (const it of m.items) await toAm(it, true); toast('Alle Messungen ins Aufmaß übernommen'); ui(); }
   }
+  async function takeNet() {
+    const sum = planeSummary(m);
+    if (!sum || !(sum.areas.length || sum.deductions.length)) { toast('Zuerst eine Fläche oder einen Abzug zeichnen'); return; }
+    const r = await modal({ title: 'Ins Aufmaß übernehmen', html: `<p><b>ca. ${fmtNum(sum.net, 2)} m²</b> netto</p><p class="small">Herkunft: dieses Foto. ${PLANE_HINT}</p>`, fields: [{ name: 'bez', label: 'Bezeichnung', value: sum.areas[0]?.name || 'Dachfläche' }], buttons: [{ label: 'Abbrechen', value: null }, { label: 'Übernehmen', value: 'ok', cls: 'primary' }] });
+    if (!r || !onToPlane) return;
+    m.planeAufmassId = await onToPlane({ bez: (r.bez || '').trim() || 'Dachfläche', net: sum.net });
+    await flush();
+    toast('Ins Aufmaß übernommen');
+    ui();
+  }
   async function toAm(it, silent) {
     const v = measureValue(m, it); if (!v) { toast('Erst Maßstab oder Perspektive setzen'); return; }
     it.aufmassId = await onToAufmass(it, v); await flush(); if (!silent) toast('Ins Aufmaß übernommen'); ui();
@@ -338,7 +389,7 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     if (r === 'fit') { fit(); draw(); }
     if (r === 'reflen') { if (m.mode === 'scale' && m.scale) askScale(m.scale.len); else if (m.mode === 'persp' && m.persp) askPersp(m.persp); else toast('Noch keine Referenz gesetzt'); }
     if (r === 'delcal' && await confirmDlg('Kalibrierung löschen?', 'Maßstab und Perspektive werden entfernt. Messungen bleiben erhalten.')) { m.mode = 'none'; m.scale = null; m.persp = null; changed(); ui(); }
-    if (r === 'rect') { if (!(m.mode === 'persp' && m.persp)) return toast('Dafür zuerst Perspektive (4 Punkte) kalibrieren'); await flush(); onRectify(JSON.parse(JSON.stringify(m))); }
+    if (r === 'rect') { if (!(m.mode === 'persp' && m.persp)) return toast('Dafür zuerst die Referenz (4 Ecken) setzen'); await flush(); onRectify(JSON.parse(JSON.stringify(m))); }
   }
   root.querySelector('.me').addEventListener('click', async e => {
     const t = e.target.closest('[data-t]'); if (t) return setTool(t.dataset.t);
@@ -354,8 +405,20 @@ export function mountEditor(root, { img, measure, title, onChange, onToAufmass, 
     if (a === 'rename' && it) { const r = await modal({ title: 'Bezeichnung', fields: [{ name: 'n', label: 'Name', value: it.name }] }); if (r) { it.name = r.n.trim() || it.name; changed(); ui(); } }
     if (a === 'togglePitch' && it) { if (!m.pitch) { await editPitch(); if (!m.pitch) return; it.usePitch = true; } else it.usePitch = !it.usePitch; changed(); ui(); }
     if (a === 'toAm' && it) toAm(it);
+    if (a === 'takeNet') takeNet();
+    if (a === 'rect') { if (!(m.mode === 'persp' && m.persp)) return toast('Dafür zuerst die Referenz (4 Ecken) setzen'); await flush(); onRectify(JSON.parse(JSON.stringify(m))); }
     if (a === 'delItem' && it && await confirmDlg('Messung löschen?', it.name)) { m.items = m.items.filter(i => i !== it); selected = null; changed(); ui(); }
   });
   setTool(tool); requestAnimationFrame(resize);
-  return { destroy() { ro.disconnect(); flush(); }, get measure() { return m; }, view };
+  return {
+    destroy() { ro.disconnect(); flush(); },
+    get measure() { return m; },
+    view,
+    summary: () => planeSummary(m),
+    clientPoint(ix, iy) {
+      const [x, y] = toS([ix, iy]);
+      const r = cv.getBoundingClientRect();
+      return { x: r.left + x, y: r.top + y };
+    },
+  };
 }

@@ -2,7 +2,7 @@
 import { fmtDate, fmtDateTime, fmtNum, fmtCoord, loadImg, HEADER_COLORS } from './util.js';
 import { drawToCanvas } from './media.js';
 import { renderAnnotated, fmtVal } from './measure.js';
-import { measureValue, realMapper } from './geom.js';
+import { measureValue, realMapper, planeSummary, PLANE_HINT, PLANE_ONE } from './geom.js';
 import { renderSketch } from './sketch.js';
 import { renderDoc, blankCanvas } from './draw.js';
 import { importLegacyStrokes, evaluateCycle, findCycles, partSummary } from './plan.js';
@@ -34,6 +34,21 @@ function markerListe(p, photos) {
   }
   if (own.length && p?.markup?.exportId && (photos || []).some((o) => o.id === p.markup.exportId)) return [];
   return own;
+}
+function flaechenZeilen(p) {
+  const s = planeSummary(p?.measure);
+  if (!s) return [];
+  const out = [`Fläche messen, Referenz ca. ${fmtNum(p.measure.persp.w, 2)} × ${fmtNum(p.measure.persp.h, 2)} m`];
+  for (const r of s.lengths) out.push(`${r.name}: ca. ${fmtNum(r.value, 2)} m`);
+  for (const r of s.areas) out.push(`${r.name}: ca. ${fmtNum(r.value, 2)} m²`);
+  for (const r of s.deductions) out.push(`Abzug ${r.name}: ca. ${fmtNum(r.value, 2)} m²`);
+  if (s.areas.length || s.deductions.length) {
+    if (s.deductions.length) out.push(`Abzüge ca. ${fmtNum(s.deduct, 2)} m²`);
+    out.push(`Netto ca. ${fmtNum(s.net, 2)} m²`);
+  }
+  out.push(PLANE_HINT);
+  if (s.accuracy === 'one') out.push(PLANE_ONE);
+  return out;
 }
 function notizAmFoto(notes, photoId) {
   return (notes || []).filter((n) => n.photoId === photoId).sort((a, b) => (a.created || 0) - (b.created || 0));
@@ -104,7 +119,8 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
       doc.setFontSize(10);
       const noteLines = linked.flatMap((n) => doc.splitTextToSize(String(n.text || ''), CW - 4).map((l, idx) => (idx === 0 ? `Notiz: ${l}` : l)));
       const markLines = markers.flatMap((m) => doc.splitTextToSize(`${m.n}. ${m.note || ''}`.trim(), CW - 4));
-      const extraH = (noteLines.length + markLines.length + (markLines.length ? 1 : 0)) * 4.4;
+      const planeLines = flaechenZeilen(p).flatMap((line) => doc.splitTextToSize(line, CW - 4));
+      const extraH = (noteLines.length + markLines.length + planeLines.length + (markLines.length ? 1 : 0)) * 4.4;
       const textH = metaL.length * 3.9 + capL.length * 4.6 + extraH + 3;
       const block = Math.max(slotH, textH + 42);
       if (y > 40 && y + Math.min(block, PH - 40) > PH - 16) newPage();
@@ -124,6 +140,10 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
           markLines.forEach(l => { doc.text(l, M + 2, ty); ty += 4.4; });
         }
         noteLines.forEach(l => { doc.text(l, M, ty); ty += 4.4; });
+      }
+      if (planeLines.length) {
+        doc.setTextColor(20, 24, 29); doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
+        planeLines.forEach(l => { doc.text(l, M, ty); ty += 4.4; });
       }
       y = Math.max(y + slotH + 4, ty + 4);
     }
@@ -150,6 +170,7 @@ export async function buildPdf({ project, photos, notes, aufmass, sketches = [],
     aufmass.forEach((r, i) => {
       const srcBits = [];
       if (r.photoId && photoNo.has(r.photoId)) srcBits.push(`Foto ${photoNo.get(r.photoId)}`);
+      if (r.ca) srcBits.push('ca.');
       if (r.calc?.faceLabel) srcBits.push(r.calc.faceLabel);
       if (!srcBits.length && r.expr && parseFloat(String(r.expr).replace(',', '.')) !== +r.menge) srcBits.push(r.expr);
       const vals = { pos: r.pos || String(i + 1), bez: r.bez || '', menge: isFinite(r.menge) && r.menge !== null && r.menge !== '' ? fmtNum(+r.menge, 2) : '', einheit: r.einheit || '', src: srcBits.join(' · ') };

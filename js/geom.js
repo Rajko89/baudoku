@@ -57,6 +57,94 @@ export function realMapper(m) {
   return null;
 }
 export function pitchFactor(m, item) { const a = +m.pitch || 0; return item.usePitch && a > 0 && a < 89 ? 1 / Math.cos(a * Math.PI / 180) : 1; }
+
+export const PLANE_HINT = 'Messung gilt nur für die Ebene der Referenz, kein Ersatz für ein Aufmaß.';
+export const PLANE_ONE = 'Nur ein Referenzmaß: geringere Genauigkeit.';
+
+function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+function norm3(a) { const n = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / n, a[1] / n, a[2] / n]; }
+function cross3(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+function dist3(a, b) { return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]); }
+/** Schnitt zweier Geraden a-b und c-d, oder null wenn sie parallel sind. */
+export function lineIntersect(a, b, c, d) {
+  const rx = b[0] - a[0], ry = b[1] - a[1], sx = d[0] - c[0], sy = d[1] - c[1];
+  const den = rx * sy - ry * sx;
+  if (Math.abs(den) < 1e-12) return null;
+  const t = ((c[0] - a[0]) * sy - (c[1] - a[1]) * sx) / den;
+  return [a[0] + t * rx, a[1] + t * ry];
+}
+function pixelAspect(pts) {
+  const w = (dist(pts[0], pts[1]) + dist(pts[3], pts[2])) / 2;
+  const h = (dist(pts[1], pts[2]) + dist(pts[0], pts[3])) / 2;
+  if (!(w > 1e-6 && h > 1e-6)) return null;
+  return h / w;
+}
+/** Höhe/Breite aus der Rechteckbedingung und einem angenommenen Bildhauptpunkt. */
+export function rectangleAspect(pts, image) {
+  if (!image?.w || !image?.h || pts?.length !== 4) return null;
+  const vx = lineIntersect(pts[0], pts[1], pts[3], pts[2]);
+  const vy = lineIntersect(pts[0], pts[3], pts[1], pts[2]);
+  if (!vx || !vy) return null;
+  const cx = image.w / 2, cy = image.h / 2;
+  const v1 = [vx[0] - cx, vx[1] - cy], v2 = [vy[0] - cx, vy[1] - cy];
+  const f2 = -(v1[0] * v2[0] + v1[1] * v2[1]);
+  if (!(f2 > 1)) return null;
+  const f = Math.sqrt(f2);
+  const rx = norm3([v1[0], v1[1], f]);
+  const ry = norm3([v2[0], v2[1], f]);
+  let n = norm3(cross3(rx, ry));
+  const dir0 = [pts[0][0] - cx, pts[0][1] - cy, f];
+  if (dot3(n, dir0) < 0) n = [-n[0], -n[1], -n[2]];
+  const hit = (p) => {
+    const dir = [p[0] - cx, p[1] - cy, f];
+    const den = dot3(n, dir);
+    if (Math.abs(den) < 1e-9) return null;
+    const t = 1 / den;
+    if (!(t > 0)) return null;
+    return [dir[0] * t, dir[1] * t, dir[2] * t];
+  };
+  const X = pts.map(hit);
+  if (X.some((q) => !q)) return null;
+  const rawW = (dist3(X[0], X[1]) + dist3(X[3], X[2])) / 2;
+  const rawH = (dist3(X[0], X[3]) + dist3(X[1], X[2])) / 2;
+  if (!(rawW > 1e-8 && rawH > 1e-8)) return null;
+  return { ratio: rawH / rawW, method: 'vanish', f };
+}
+/**
+ * Fehlende Seite eines Referenzrechtecks. Zwei bekannte Maße werden nicht geschätzt.
+ * pts in der Reihenfolge oben links, oben rechts, unten rechts, unten links.
+ */
+export function estimateRectangle(pts, known, image) {
+  const width = known?.width > 0 ? +known.width : 0;
+  const height = known?.height > 0 ? +known.height : 0;
+  if (!pts || pts.length !== 4 || (width > 0 && height > 0) || (width <= 0 && height <= 0)) return null;
+  const via = rectangleAspect(pts, image);
+  const ratio = via?.ratio || pixelAspect(pts);
+  if (!(ratio > 0)) return null;
+  if (width > 0) return { w: width, h: width * ratio, method: via ? 'vanish' : 'pixel' };
+  return { w: height / ratio, h: height, method: via ? 'vanish' : 'pixel' };
+}
+/** Längen, Flächen, Abzüge und Netto einer gespeicherten Perspektivmessung. */
+export function planeSummary(m) {
+  if (!m || m.mode !== 'persp' || !m.persp || !(m.persp.w > 0) || !(m.persp.h > 0)) return null;
+  const mapper = realMapper(m);
+  if (!mapper) return null;
+  const lengths = [], areas = [], deductions = [];
+  for (const it of m.items || []) {
+    const v = measureValue(m, it.type === 'line' ? it : { ...it, type: 'area' }, mapper);
+    if (!v) continue;
+    const row = { id: it.id, name: it.name || '', value: v.value, unit: v.unit };
+    if (it.type === 'line') lengths.push(row);
+    else if (it.abzug) deductions.push(row);
+    else if (it.type === 'area') areas.push(row);
+  }
+  const gross = areas.reduce((s, r) => s + r.value, 0);
+  const deduct = deductions.reduce((s, r) => s + r.value, 0);
+  return {
+    accuracy: m.persp.accuracy === 'one' ? 'one' : 'two',
+    lengths, areas, deductions, gross, deduct, net: gross - deduct,
+  };
+}
 /** Messwert eines Elements */
 export function measureValue(m, item, mapper = realMapper(m)) {
   if (!mapper) return null;
